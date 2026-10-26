@@ -49,8 +49,9 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     }
 
     func setViewport(size: CGSize, insets: UIEdgeInsets) {
-        let args: [Double] = [size.width, size.height, insets.top, insets.right, insets.bottom, insets.left].map { Double($0) }
-        js.async { self.call("__jigSetViewport", args) }
+        let (w, h) = (Double(size.width), Double(size.height))
+        let (t, r, b, l) = (Double(insets.top), Double(insets.right), Double(insets.bottom), Double(insets.left))
+        js.async { self.call("__jigSetViewport", w, h, t, r, b, l) }
     }
 
     func dispatch(id: Int, name: String, payload: [String: Any] = [:]) {
@@ -79,7 +80,13 @@ nonisolated final class JigRuntime: @unchecked Sendable {
             fatalError("jig-core.js is missing from the app bundle. Run `npm run build:native` in the repo root.")
         }
         context.evaluateScript(source, withSourceURL: url)
-        context.evaluateScript(Self.shim)
+        // Shared with the Android host: adapts the runtime's Host interface to `__native`.
+        guard let hostURL = Bundle.main.url(forResource: "jig-host", withExtension: "js"),
+              let hostSource = try? String(contentsOf: hostURL, encoding: .utf8)
+        else {
+            fatalError("jig-host.js is missing from the app bundle. Run `npm run build:native` in the repo root.")
+        }
+        context.evaluateScript(hostSource, withSourceURL: hostURL)
     }
 
     private func call(_ function: String, _ args: Any...) {
@@ -87,7 +94,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     }
 
     private func publishTheme() {
-        guard let json = context.evaluateScript("JSON.stringify({ colors: runtime.theme, dark: runtime.colorScheme === 'dark' })")?.toString(),
+        guard let json = context.objectForKeyedSubscript("__jigTheme").call(withArguments: [])?.toString(),
               let data = json.data(using: .utf8),
               let obj = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else { return }
@@ -100,7 +107,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     private func installNative(renderer: UIKitRenderer, toggleSize: CGSize) {
         let native = JSValue(newObjectIn: context)!
 
-        let apply: @convention(block) (String) -> Void = { json in
+        let apply: @convention(block) (String, Int) -> Void = { json, _ in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { renderer.apply(json: json) }
             }
@@ -136,43 +143,6 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         native.setObject(log, forKeyedSubscript: "log" as NSString)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)
     }
-
-    /// The JS half of the host: adapts the runtime's `Host` interface to `__native`.
-    private static let shim = """
-    var __frameQueue = [];
-    var host = {
-      apply: function (ops) { __native.apply(JSON.stringify(ops)); },
-      measureText: function (text, s, maxWidth) {
-        var r = __native.measure(text, s.fontSize, s.fontWeight, s.lineHeight, maxWidth);
-        return { width: r[0], height: r[1] };
-      },
-      measureControl: function (type) {
-        var r = __native.measureControl(type);
-        return r[0] > 0 ? { width: r[0], height: r[1] } : undefined;
-      },
-      requestFrame: function (cb) {
-        __frameQueue.push(cb);
-        if (__frameQueue.length === 1) __native.requestFrame();
-      },
-      storage: {
-        get: function (k) { return __native.storageGet(k); },
-        set: function (k, v) { __native.storageSet(k, v); }
-      },
-      now: function () { return __native.now(); },
-      log: function (level, message) { __native.log(level, message); }
-    };
-    function __jigFrame() {
-      var q = __frameQueue;
-      __frameQueue = [];
-      for (var i = 0; i < q.length; i++) q[i]();
-    }
-    function __jigLoad(json) { runtime.load(JSON.parse(json), { fresh: true }); }
-    function __jigSetColorScheme(scheme) { runtime.setColorScheme(scheme); }
-    function __jigSetViewport(v) { runtime.setViewport(v[0], v[1], [v[2], v[3], v[4], v[5]]); }
-    function __jigDispatch(id, name, json) { runtime.dispatch(id, name, JSON.parse(json)); }
-    function __jigBack() { runtime.back(); }
-    var runtime = new Jig.Runtime(host);
-    """
 
     // MARK: - Frames
 

@@ -1,4 +1,4 @@
-// Copies the core bundle and demo specs into the native apps, which load them
+// Copies the core bundle, the shared native host glue and demo specs into the native apps, which load them
 // from their bundles. Run after `npm run build -w core` (see `npm run build:native`).
 import { cpSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -11,6 +11,7 @@ const specs = readdirSync(join(root, "specs")).filter((f) => f.endsWith(".json")
 for (const dir of targets) {
   mkdirSync(dir, { recursive: true });
   cpSync(join(root, "core/dist/jig-core.js"), join(dir, "jig-core.js"));
+  cpSync(join(root, "core/native/host.js"), join(dir, "jig-host.js"));
   for (const f of specs) cpSync(join(root, "specs", f), join(dir, f));
-  console.log(`runtime → ${dir.slice(root.length + 1)} (jig-core.js, ${specs.length} specs)`);
+  console.log(`runtime → ${dir.slice(root.length + 1)} (jig-core.js, jig-host.js, ${specs.length} specs)`);
 }

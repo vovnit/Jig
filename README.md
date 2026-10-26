@@ -38,18 +38,18 @@ The Meta Model API is OpenAI-SDK compatible: only the key and base URL change.
 
 | Path | What |
 | --- | --- |
-| `core/` | The shared runtime in TypeScript: spec, expressions, signals, view tree, flex layout, bridge ops. Bundles to one file (`core/dist/jig-core.js`) for the web, JavaScriptCore (iOS) and QuickJS/Hermes (Android). |
+| `core/` | The shared runtime in TypeScript: spec, expressions, signals, view tree, flex layout, bridge ops. Bundles to one file (`core/dist/jig-core.js`) for the web, JavaScriptCore (iOS) and QuickJS (Android). `core/native/host.js` is the glue both native hosts share. |
 | `web/` | The web host (DOM renderer and text measurement) and the playground: demo apps, live spec editing, ops and frame inspector. |
 | `specs/` | Demo app specs (water tracker, chore chart, medication log) and `showcase.json`, a parity check that uses every primitive. Also used as test fixtures. |
 | `ios/` | The UIKit host: runs `jig-core.js` in JavaScriptCore and applies its ops to UIKit views. |
-| `android/` | The Android host (an Android Views shell for now). |
+| `android/` | The Android host: runs `jig-core.js` in QuickJS and applies its ops to Android Views. |
 
 ```bash
 npm install
 npm run dev      # playground at http://localhost:5173
 npm test         # core tests in Node with a fake measurer
 npm run build    # core bundle + web build
-npm run build:native   # core bundle + demo specs copied into the iOS and Android apps
+npm run build:native   # core bundle, native glue and demo specs copied into the iOS and Android apps
 ```
 
 The iOS and Android apps load `jig-core.js` and the demo specs from their bundles, so run `npm run build:native` before building them (and after changing `core/` or `specs/`). Then open `ios/Jig/Jig.xcodeproj` in Xcode, or build `android/Jig` with Gradle.
@@ -138,7 +138,7 @@ Native stays "dumb". It receives one batch of ops per frame:
 
 - Web: the browser itself.
 - iOS: JavaScriptCore (built into the system) on its own serial queue. Text is measured right on that queue (TextKit measurement is thread-safe), each frame's ops hop to the main thread as one JSON string, and events hop back. UIKit sets frames directly; SwiftUI would fight an external layout.
-- Android: QuickJS or Hermes.
+- Android: QuickJS ([quickjs-wrapper](https://github.com/HarlonWang/quickjs-wrapper)) on its own thread, with the same split as iOS: text measured with StaticLayout on the JS thread, ops to the main thread. Views are positioned by a custom `JigLayout` that only enforces the JS frames.
 
 ### Security
 
@@ -177,7 +177,7 @@ After profiling, if needed:
 - [x] Loop phase timers for profiling
 - [x] Web host (DOM) and playground with live spec editing
 - [x] iOS host (UIKit + JavaScriptCore): views, text measurement, SVG shapes, images, events, storage, keyboard avoidance, back swipe, dark mode
-- [ ] Android host
+- [x] Android host (Android Views + QuickJS): same feature set as iOS, with system back
 - [x] Per-app storage
 - [ ] Spec generation from a description (Muse Spark, structured outputs)
 - [ ] Edit loop by prompt: changes apply instantly
