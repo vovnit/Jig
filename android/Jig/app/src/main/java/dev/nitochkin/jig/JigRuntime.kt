@@ -21,6 +21,8 @@ import org.json.JSONObject
  * that created it), Views on the main thread. Ops cross to main as one JSON string
  * per frame; events and viewport changes cross to JS asynchronously. Text is
  * measured right on the JS thread with StaticLayout, so layout never waits on main.
+ * SQLite also runs on the JS thread: the runtime saves at the end of a frame, after
+ * the ops are sent.
  */
 class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
     data class Theme(val colors: Map<String, String>, val isDark: Boolean)
@@ -119,7 +121,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     private fun installNative(toggle: Pair<Double, Double>) {
         val native = qjs.createNewJSObject()
-        val prefs = appContext.getSharedPreferences("jig", Context.MODE_PRIVATE)
+        val database = SqlDatabase(appContext)
 
         native.setProperty("apply", JSCallFunction { args ->
             val json = args[0] as String
@@ -145,11 +147,8 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
             main.post(::scheduleFrame)
             null
         })
-        native.setProperty("storageGet", JSCallFunction { args -> prefs.getString(args[0] as String, null) })
-        native.setProperty("storageSet", JSCallFunction { args ->
-            prefs.edit().putString(args[0] as String, args[1] as String).apply()
-            null
-        })
+        native.setProperty("sqlQuery", JSCallFunction { args -> database.query(args[0] as String, args[1] as String) })
+        native.setProperty("sqlExec", JSCallFunction { args -> database.exec(args[0] as String) })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })
         native.setProperty("log", JSCallFunction { args ->
             Log.w(TAG, "${args[0]}: ${args[1]}")

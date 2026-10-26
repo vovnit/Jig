@@ -9,6 +9,7 @@ import { BUILTIN_COMPONENTS, COLOR_KEYS, SHAPES, TYPE_ALIASES, defaultStyle } fr
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, setIn, str } from "./expr.ts";
 import { type Box, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, root, untrack } from "./signals.ts";
+import { DataStore } from "./store.ts";
 import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
 const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "props"]);
@@ -93,6 +94,7 @@ export class Runtime {
   private updates = new Map<ViewNode, Props>();
   private frameRequested = false;
   private saveRequested = false;
+  private store: DataStore | null = null;
   private appOwner: Owner | null = null;
   private textCache = new Map<string, Size>();
   private globalScope: Scope;
@@ -130,9 +132,11 @@ export class Runtime {
     this.components = { ...BUILTIN_COMPONENTS, ...(spec.components ?? {}) };
     this.errors = [];
 
-    const stored = this.readStorage(spec.id);
+    if (this.store?.app !== spec.id) this.store = this.openStore(spec.id);
     const next = new Map<string, Signal<unknown>>();
     this.dataKeys = new Set(Object.keys(spec.data ?? {}));
+    // Keys kept from before a hot reload already hold the latest value.
+    const stored = [...this.dataKeys].some((k) => !this.signals.has(k)) ? this.readStore() : {};
     for (const [k, f] of Object.entries(spec.data ?? {})) {
       const prev = this.signals.get(k);
       next.set(k, prev ?? new Signal(k in stored ? stored[k] : defaultFor(f)));
@@ -884,11 +888,33 @@ export class Runtime {
 
   // ---------- Storage ----------
 
-  private readStorage(id: string): Record<string, unknown> {
+  /** Deletes the app's stored data and starts it again from the spec defaults. */
+  resetData(): void {
+    if (!this.spec) return;
     try {
-      const raw = this.host.storage?.get(`jig:${id}`);
-      return raw ? JSON.parse(raw) : {};
-    } catch {
+      this.store?.clear();
+    } catch (e) {
+      this.error("storage", (e as Error).message);
+    }
+    for (const k of this.dataKeys) this.signals.delete(k);
+    this.load(this.spec);
+  }
+
+  private openStore(app: string): DataStore | null {
+    if (!this.host.db) return null;
+    try {
+      return new DataStore(this.host.db, app);
+    } catch (e) {
+      this.error("storage", (e as Error).message);
+      return null;
+    }
+  }
+
+  private readStore(): Record<string, unknown> {
+    try {
+      return this.store?.read() ?? {};
+    } catch (e) {
+      this.error("storage", (e as Error).message);
       return {};
     }
   }
@@ -900,10 +926,14 @@ export class Runtime {
 
   private save(): void {
     this.saveRequested = false;
-    if (!this.host.storage || !this.spec) return;
-    const out: Record<string, unknown> = {};
-    for (const k of this.dataKeys) out[k] = this.signals.get(k)?.peek();
-    this.host.storage.set(`jig:${this.spec.id}`, JSON.stringify(out));
+    if (!this.store) return;
+    const values = new Map<string, unknown>();
+    for (const k of this.dataKeys) values.set(k, this.signals.get(k)?.peek());
+    try {
+      this.store.write(values);
+    } catch (e) {
+      this.error("storage", (e as Error).message);
+    }
   }
 }
 

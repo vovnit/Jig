@@ -7,10 +7,17 @@
 //   measure(text, size, weight, lineHeight, maxWidth) -> [width, height]
 //   measureControl(type) -> [width, height]     [0, 0] means "use the default"
 //   requestFrame()                              call __jigFrame() before the next paint
-//   storageGet(key) -> string | null, storageSet(key, value)
+//   sqlQuery(sql, paramsJson) -> json            {"rows": [...]} or {"error": "..."}
+//   sqlExec(statementsJson) -> json              [[sql, params?], ...] in one transaction
 //   now() -> milliseconds, log(level, message)
 
 var __frameQueue = [];
+
+function sqlResult(json) {
+  var r = JSON.parse(json);
+  if (r.error) throw new Error(r.error);
+  return r.rows;
+}
 
 var host = {
   apply: function (ops) { __native.apply(JSON.stringify(ops), runtime.nav.peek().length); },
@@ -26,9 +33,9 @@ var host = {
     __frameQueue.push(cb);
     if (__frameQueue.length === 1) __native.requestFrame();
   },
-  storage: {
-    get: function (k) { return __native.storageGet(k); },
-    set: function (k, v) { __native.storageSet(k, v); }
+  db: {
+    query: function (sql, params) { return sqlResult(__native.sqlQuery(sql, JSON.stringify(params || []))); },
+    exec: function (statements) { sqlResult(__native.sqlExec(JSON.stringify(statements))); }
   },
   now: function () { return __native.now(); },
   log: function (level, message) { __native.log(level, message); }

@@ -67,13 +67,18 @@ test("`if` creates and removes a subtree", () => {
   assert.ok(ops.some((o) => o[0] === "remove" && o[2] === createdId));
 });
 
-test("data persists to host storage and is restored", () => {
+test("data persists to the host database and is restored", () => {
   const { host, rt } = boot(counter);
   rt.dispatch(byText(rt, "Add")!.id, "tap");
   frame(host);
-  assert.equal(JSON.parse(host.store.get("jig:counter")!).n, 1);
-  const again = boot(counter, host.store);
+  assert.deepEqual(host.db.query("SELECT value FROM jig_values WHERE app = 'counter' AND key = 'n'"), [{ value: "1" }]);
+  const again = boot(counter, host.db);
   assert.ok(byText(again.rt, "Count: 1"));
+
+  again.rt.resetData();
+  frame(again.host);
+  assert.ok(byText(again.rt, "Count: 0"));
+  assert.equal(boot(counter, host.db).rt.get("n"), 0);
 });
 
 test("hot reload keeps state and rebuilds the view", () => {

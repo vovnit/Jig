@@ -33,9 +33,15 @@ export interface Size {
   height: number;
 }
 
-export interface Storage {
-  get(key: string): string | null;
-  set(key: string, value: string): void;
+export type SqlValue = string | number | null;
+export type Statement = [sql: string, params?: SqlValue[]];
+
+/** A SQLite database. Calls are synchronous, on the runtime's thread. */
+export interface Database {
+  /** Runs one read; each row maps column name → value. */
+  query(sql: string, params?: SqlValue[]): Record<string, SqlValue>[];
+  /** Runs the statements in one transaction. On error it rolls back and throws. */
+  exec(statements: Statement[]): void;
 }
 
 export interface Host {
@@ -47,7 +53,8 @@ export interface Host {
   measureControl?(type: string): Size;
   /** Schedule `cb` before the next paint (rAF, CADisplayLink, Choreographer). */
   requestFrame(cb: () => void): void;
-  storage?: Storage;
+  /** Persists app `data` (see store.ts). Without it, data lives for the session only. */
+  db?: Database;
   now?(): number;
   log?(level: "info" | "warn" | "error", message: string): void;
 }

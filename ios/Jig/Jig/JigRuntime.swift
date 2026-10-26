@@ -8,7 +8,8 @@ import UIKit
 /// Threading: JS runs on its own serial queue, UIKit on the main thread. Ops cross
 /// to main as one JSON string per frame; events and viewport changes cross to JS
 /// asynchronously. Text measurement runs on the JS queue (TextKit measurement is
-/// thread-safe), so a layout never waits on the main thread.
+/// thread-safe), so a layout never waits on the main thread. SQLite also runs on the
+/// JS queue: the runtime saves at the end of a frame, after the ops are sent.
 nonisolated final class JigRuntime: @unchecked Sendable {
     struct Theme: Sendable {
         var colors: [String: String]
@@ -124,12 +125,9 @@ nonisolated final class JigRuntime: @unchecked Sendable {
                 MainActor.assumeIsolated { self?.scheduleFrame() }
             }
         }
-        let defaults = UserDefaults.standard
-        let storageGet: @convention(block) (String) -> JSValue = { key in
-            guard let value = defaults.string(forKey: key) else { return JSValue(nullIn: JSContext.current()) }
-            return JSValue(object: value, in: JSContext.current())
-        }
-        let storageSet: @convention(block) (String, String) -> Void = { key, value in defaults.set(value, forKey: key) }
+        let database = SQLiteDatabase.standard()
+        let sqlQuery: @convention(block) (String, String) -> String = { sql, params in database.query(sql, paramsJSON: params) }
+        let sqlExec: @convention(block) (String) -> String = { statements in database.exec(statements) }
         let now: @convention(block) () -> Double = { CACurrentMediaTime() * 1000 }
         let log: @convention(block) (String, String) -> Void = { level, message in NSLog("[jig] %@: %@", level, message) }
 
@@ -137,8 +135,8 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         native.setObject(measure, forKeyedSubscript: "measure" as NSString)
         native.setObject(measureControl, forKeyedSubscript: "measureControl" as NSString)
         native.setObject(requestFrame, forKeyedSubscript: "requestFrame" as NSString)
-        native.setObject(storageGet, forKeyedSubscript: "storageGet" as NSString)
-        native.setObject(storageSet, forKeyedSubscript: "storageSet" as NSString)
+        native.setObject(sqlQuery, forKeyedSubscript: "sqlQuery" as NSString)
+        native.setObject(sqlExec, forKeyedSubscript: "sqlExec" as NSString)
         native.setObject(now, forKeyedSubscript: "now" as NSString)
         native.setObject(log, forKeyedSubscript: "log" as NSString)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)

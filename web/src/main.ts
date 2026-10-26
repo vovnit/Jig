@@ -1,5 +1,6 @@
 import "./style.css";
 import { type AppSpec, type FrameStats, type Op, Runtime } from "@jig/core";
+import { openDatabase } from "./db.ts";
 import { DomHost } from "./host.ts";
 import water from "../../specs/water.json";
 import chores from "../../specs/chores.json";
@@ -15,6 +16,7 @@ const specStatus = $<HTMLDivElement>("#spec-status");
 
 
 const host = new DomHost(surface);
+host.db = await openDatabase();
 const runtime = new Runtime(host);
 host.runtime = runtime;
 
@@ -93,10 +95,7 @@ function setStatus(msg?: string, error = false): void {
   specStatus.classList.toggle("error", error);
 }
 
-$<HTMLButtonElement>("#reset").onclick = () => {
-  localStorage.removeItem(`jig:${current.id}`);
-  open(current);
-};
+$<HTMLButtonElement>("#reset").onclick = () => runtime.resetData();
 
 // ---------- Inspector ----------
 const tabs = $<HTMLDivElement>("#tabs");

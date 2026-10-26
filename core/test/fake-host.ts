@@ -1,5 +1,6 @@
 // A deterministic host for Node tests: fixed-width glyphs, greedy word wrap.
-import type { Host, Op, TextMeasureStyle } from "../src/bridge.ts";
+import { DatabaseSync } from "node:sqlite";
+import type { Database, Host, Op, SqlValue, TextMeasureStyle } from "../src/bridge.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { AppSpec } from "../src/spec.ts";
 
@@ -23,17 +24,36 @@ export function measure(text: string, style: TextMeasureStyle, maxWidth: number)
   return { width: Math.min(maxWidth, Math.max(...lines)), height: lines.length * style.lineHeight };
 }
 
+/** In-memory SQLite (Node's built-in driver) behind the host `Database` contract. */
+export function makeDb(sqlite = new DatabaseSync(":memory:")): Database & { sqlite: DatabaseSync } {
+  return {
+    sqlite,
+    // Rows come back with a null prototype; copy them into plain objects.
+    query: (sql, params = []) => sqlite.prepare(sql).all(...params).map((r) => ({ ...r }) as Record<string, SqlValue>),
+    exec(statements) {
+      sqlite.exec("BEGIN");
+      try {
+        for (const [sql, params = []] of statements) sqlite.prepare(sql).run(...params);
+        sqlite.exec("COMMIT");
+      } catch (e) {
+        sqlite.exec("ROLLBACK");
+        throw e;
+      }
+    },
+  };
+}
+
 export interface TestHost extends Host {
   batches: Op[][];
-  store: Map<string, string>;
+  db: ReturnType<typeof makeDb>;
   pending: (() => void)[];
   measureCalls: number;
 }
 
-export function makeHost(store = new Map<string, string>()): TestHost {
+export function makeHost(db = makeDb()): TestHost {
   const host: TestHost = {
     batches: [],
-    store,
+    db,
     pending: [],
     measureCalls: 0,
     apply(ops) {
@@ -46,7 +66,6 @@ export function makeHost(store = new Map<string, string>()): TestHost {
     requestFrame(cb) {
       host.pending.push(cb);
     },
-    storage: { get: (k) => store.get(k) ?? null, set: (k, v) => void store.set(k, v) },
   };
   return host;
 }
@@ -58,8 +77,8 @@ export function frame(host: TestHost): Op[] {
   return host.batches.slice(before).flat();
 }
 
-export function boot(spec: AppSpec, store?: Map<string, string>) {
-  const host = makeHost(store);
+export function boot(spec: AppSpec, db?: TestHost["db"]) {
+  const host = makeHost(db);
   const rt = new Runtime(host);
   rt.setViewport(390, 844);
   rt.load(spec);

@@ -1,7 +1,7 @@
 // The web host: a "dumb" DOM renderer for the shared runtime. Every view is an
 // absolutely positioned element; the JS layout engine owns all geometry.
 
-import { type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
+import { type Database, type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
 
 type Style = Record<string, unknown>;
 
@@ -28,22 +28,7 @@ export class DomHost implements Host {
     document.body.appendChild(this.probe);
   }
 
-  storage = {
-    get(key: string): string | null {
-      try {
-        return localStorage.getItem(key);
-      } catch {
-        return null;
-      }
-    },
-    set(key: string, value: string): void {
-      try {
-        localStorage.setItem(key, value);
-      } catch {
-        // Storage can be unavailable (private mode); data then lives for the session only.
-      }
-    },
-  };
+  db?: Database;
 
   requestFrame(cb: () => void): void {
     requestAnimationFrame(cb);

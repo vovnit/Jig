@@ -105,6 +105,14 @@ A spec has `data` (typed and persisted), `state` (transient UI state), `screens`
   - Hosts skip animations when the system asks for reduced motion.
 - **Design tokens:** theme colors (`accent`, `muted`, `surface`, ...) and type variants (`largeTitle`, `title`, `headline`, `body`, `callout`, `caption`) are resolved in the core, so every platform renders the same numbers. Each token has a dark value; hosts follow the system appearance with `runtime.setColorScheme`, and a spec can override either set (`theme`, `darkTheme`).
 
+### Storage
+
+App `data` lives in SQLite, in one database per device shared by every app, so the shared data store can query across apps later. The runtime owns the schema (`core/src/store.ts`); each host only runs SQL through a synchronous `db.query(sql, params)` / `db.exec(statements)` pair (system SQLite on iOS and Android, SQLite compiled to wasm on the web, stored in `localStorage`).
+
+- A scalar or object key is one row in `jig_values`. A list is one row per item in `jig_items`, keyed by the item's `id` (or its position when it has none), with the item as JSON text, so `json_extract` can query it.
+- Updates are immutable, so after each frame the runtime writes only the items whose references changed, in one transaction. Adding a chore writes one row.
+- `runtime.resetData()` deletes an app's rows and starts it again from the spec defaults.
+
 ### Node kinds
 
 - **Native views** (text, button, text field, toggle) become real platform widgets, so accessibility and text input come for free.
@@ -184,7 +192,7 @@ After profiling, if needed:
 - [x] Web host (DOM) and playground with live spec editing
 - [x] iOS host (UIKit + JavaScriptCore): views, text measurement, SVG shapes, images, events, storage, keyboard avoidance, back swipe, dark mode
 - [x] Android host (Android Views + QuickJS): same feature set as iOS, with system back
-- [x] Per-app storage
+- [x] Per-app storage in SQLite (row per list item, incremental writes)
 - [ ] Spec generation from a description (Muse Spark, structured outputs)
 - [ ] Edit loop by prompt: changes apply instantly
 - [ ] Automatic repair of invalid specs
