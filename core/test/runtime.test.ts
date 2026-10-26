@@ -161,3 +161,16 @@ test("incremental frames: unrelated subtrees are skipped and text is measured on
   assert.ok(stats.skippedSubtrees > 0);
   assert.ok(host.measureCalls - before <= 3, `measured ${host.measureCalls - before} strings`);
 });
+
+test("dark mode swaps theme tokens, keeps the brand accent and the app's state", () => {
+  const { host, rt } = boot({ ...counter, theme: { accent: "#ff0000", background: "#fafafa" } });
+  rt.dispatch(byText(rt, "Add")!.id, "tap");
+  frame(host);
+  rt.setColorScheme("dark");
+  frame(host);
+  assert.equal(rt.theme.accent, "#ff0000");
+  assert.equal(rt.theme.background, "#111316");
+  assert.ok(byText(rt, "Count: 1"));
+  const screen = findNode(rt, (_, t) => t === "screen")!;
+  assert.equal((screen.props.style as { background: string }).background, "#111316");
+});

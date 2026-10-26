@@ -105,3 +105,15 @@ test("incremental: a clean relayout touches nothing; a dirty leaf relayouts only
   assert.deepEqual(c2.frames.map((n) => n.frame), [[0, 0, 300, 40], [0, 40, 100, 20]]);
   assert.ok(c2.stats.skipped >= 1, "b's subtree was skipped");
 });
+
+test("a tall scroll view shrinks to fit; its siblings in a column keep their size", () => {
+  const title = node("text", {}, [], [100, 36]);
+  const body = node("spacer", { height: 2000 });
+  const sc = node("scroll", { grow: 1 }, [body]);
+  const footer = node("text", {}, [], [100, 20]);
+  const root = node("column", {}, [title, sc, footer]);
+  layoutRoot(root, 300, 600, ctx());
+  assert.deepEqual(title.frame, [0, 0, 300, 36]);
+  assert.deepEqual(sc.frame, [0, 36, 300, 544]);
+  assert.deepEqual(footer.frame, [0, 580, 300, 20]);
+});

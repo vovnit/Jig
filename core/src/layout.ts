@@ -366,7 +366,10 @@ function layoutFlex(
       }
     }
   } else if (free < 0) {
-    const weight = (p: ChildPlan) => (p.mainFixed && p.node.box.shrink === undefined ? 0 : (p.node.box.shrink ?? 1) * p.basis);
+    // As CSS `min-height: auto`: in a column only scroll views shrink below their content by default,
+    // so a long scroll body never squeezes a header. In a row, items shrink so text can wrap.
+    const defaultShrink = (n: ViewNode) => (row || n.type === "scroll" || n.type === "hscroll" ? 1 : 0);
+    const weight = (p: ChildPlan) => (p.mainFixed && p.node.box.shrink === undefined ? 0 : (p.node.box.shrink ?? defaultShrink(p.node)) * p.basis);
     const total = plans.reduce((a, p) => a + weight(p), 0);
     if (total > 0) {
       for (const p of plans) {

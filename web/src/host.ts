@@ -1,7 +1,7 @@
 // The web host: a "dumb" DOM renderer for the shared runtime. Every view is an
 // absolutely positioned element; the JS layout engine owns all geometry.
 
-import { FONT_FAMILY, type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
+import { type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
 
 type Style = Record<string, unknown>;
 
@@ -270,8 +270,10 @@ export class DomHost implements Host {
         case "background": st.background = String(val); break;
         case "color": st.color = String(val); break;
         case "radius": st.borderRadius = val === "" ? "" : `${val}px`; if (type !== "text" && type !== "textfield") st.overflow = val === "" ? "" : "hidden"; break;
-        case "borderWidth": st.borderWidth = val === "" ? "" : `${val}px`; st.borderStyle = val === "" ? "" : "solid"; break;
-        case "borderColor": st.borderColor = String(val); break;
+        // An inset outline instead of a CSS border: borders shrink the content box, which the
+        // JS layout doesn't know about (native hosts draw borders inside the frame too).
+        case "borderWidth": st.outlineWidth = val === "" ? "" : `${val}px`; st.outlineStyle = val === "" ? "" : "solid"; st.outlineOffset = val === "" ? "" : `-${val}px`; break;
+        case "borderColor": st.outlineColor = String(val); break;
         case "opacity": st.opacity = String(val); break;
         case "textAlign": st.textAlign = String(val); break;
         case "fontSize": st.fontSize = val === "" ? "" : `${val}px`; break;
@@ -283,5 +285,3 @@ export class DomHost implements Host {
     }
   }
 }
-
-export const FONT = FONT_FAMILY;

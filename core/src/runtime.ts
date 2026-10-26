@@ -9,7 +9,7 @@ import { BUILTIN_COMPONENTS, COLOR_KEYS, SHAPES, TYPE_ALIASES, defaultStyle } fr
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, setIn, str } from "./expr.ts";
 import { type Box, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, root, untrack } from "./signals.ts";
-import { type Action, type Actions, type AppSpec, DEFAULT_THEME, type FieldSpec, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle } from "./spec.ts";
+import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
 const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "props"]);
 const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
@@ -61,6 +61,7 @@ export class Runtime {
   host: Host;
   spec!: AppSpec;
   theme: Record<string, string> = DEFAULT_THEME;
+  colorScheme: ColorScheme = "light";
   components: Record<string, NodeSpec> = BUILTIN_COMPONENTS;
 
   signals = new Map<string, Signal<unknown>>();
@@ -117,7 +118,7 @@ export class Runtime {
       this.nav = new Signal<{ screen: string; params: Record<string, unknown> }[]>([]);
     }
     this.spec = spec;
-    this.theme = { ...DEFAULT_THEME, ...(spec.theme ?? {}) };
+    this.theme = resolveTheme(spec, this.colorScheme);
     this.components = { ...BUILTIN_COMPONENTS, ...(spec.components ?? {}) };
     this.errors = [];
 
@@ -151,6 +152,13 @@ export class Runtime {
       });
     }, null);
     this.scheduleFrame();
+  }
+
+  /** Follows the system appearance. Colors are resolved at build time, so the app rebuilds (state is kept). */
+  setColorScheme(scheme: ColorScheme): void {
+    if (scheme === this.colorScheme) return;
+    this.colorScheme = scheme;
+    if (this.spec) this.load(this.spec);
   }
 
   setViewport(width: number, height: number, insets: [number, number, number, number] = [0, 0, 0, 0]): void {
@@ -189,6 +197,14 @@ export class Runtime {
       if (name === "submit" && h.onSubmit) this.run(h.onSubmit, h.scope);
     }
     this.stats.bindingsMs += now(this.host) - t0;
+  }
+
+  /** Pops one screen, for the host's back gesture or button. Returns false on the first screen. */
+  back(): boolean {
+    const stack = this.nav.peek();
+    if (stack.length <= 1) return false;
+    this.nav.set(stack.slice(0, -1));
+    return true;
   }
 
   /** Runs layout and sends the batch. Hosts normally reach this through requestFrame. */
@@ -648,7 +664,7 @@ export class Runtime {
         return { width: Math.min(maxW, 160), height: ts.lineHeight };
       }
       case "toggle":
-        return { width: 51, height: 31 };
+        return this.controlSize("toggle", { width: 51, height: 31 });
       case "shape": {
         const vb = String(n.props.viewBox ?? "0 0 24 24").split(/[\s,]+/).map(Number);
         const vw = vb[2] || 24;
@@ -667,6 +683,17 @@ export class Runtime {
       default:
         return { width: 0, height: 0 };
     }
+  }
+
+  private controlSizes = new Map<string, Size>();
+
+  private controlSize(type: string, fallback: Size): Size {
+    let s = this.controlSizes.get(type);
+    if (!s) {
+      s = this.host.measureControl?.(type) ?? fallback;
+      this.controlSizes.set(type, s);
+    }
+    return s;
   }
 
   private measureText(text: string, n: ViewNode, maxW: number): Size {
@@ -766,8 +793,7 @@ export class Runtime {
         if (!this.spec.screens[a.navigate]) return this.error(where, `Unknown screen '${a.navigate}'`);
         this.nav.set([...this.nav.peek(), { screen: a.navigate, params }]);
       } else if ("back" in a) {
-        const stack = this.nav.peek();
-        if (stack.length > 1) this.nav.set(stack.slice(0, -1));
+        this.back();
       } else if ("if" in a) {
         const branch = this.evalExpr(a.if, scope, where) ? a.then : a.else;
         if (branch) this.run(branch, scope);

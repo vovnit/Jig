@@ -10,7 +10,8 @@
     "test": "npm test -w core",
     "build": "npm run build -w core && npm run build -w web",
     "dev": "npm run dev -w web",
-    "typecheck": "tsc -p core && tsc -p web"
+    "typecheck": "tsc -p core && tsc -p web",
+    "build:native": "npm run build -w core && node scripts/copy-native.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",

@@ -39,6 +39,8 @@ export interface Host {
   apply(ops: Op[]): void;
   /** Synchronous text measurement with the bundled font. Results are cached by the runtime. */
   measureText(text: string, style: TextMeasureStyle, maxWidth: number): Size;
+  /** Intrinsic size of a native control (`toggle`), when it differs from the 51×31 default. */
+  measureControl?(type: string): Size;
   /** Schedule `cb` before the next paint (rAF, CADisplayLink, Choreographer). */
   requestFrame(cb: () => void): void;
   storage?: Storage;

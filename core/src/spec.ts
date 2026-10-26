@@ -52,7 +52,10 @@ export interface AppSpec {
   id: string;
   name: string;
   description?: string;
+  /** Light-mode tokens. In dark mode only `accent` and custom tokens carry over. */
   theme?: Record<string, string>;
+  /** Dark-mode overrides. */
+  darkTheme?: Record<string, string>;
   /** Persisted, typed data. Visible to the container's data layer. */
   data?: Record<string, FieldSpec>;
   /** Transient UI state: name → default value. */
@@ -78,6 +81,29 @@ export const DEFAULT_THEME: Record<string, string> = {
   warning: "#f5a524",
 };
 
+export const DARK_THEME: Record<string, string> = {
+  accent: "#3b6ef6",
+  onAccent: "#ffffff",
+  text: "#eef0f3",
+  muted: "#9aa1ab",
+  background: "#111316",
+  surface: "#1e2126",
+  border: "#30343b",
+  danger: "#ff6369",
+  success: "#3cc489",
+  warning: "#f5b544",
+};
+
+export type ColorScheme = "light" | "dark";
+
+/** Resolves the spec's theme for a color scheme. */
+export function resolveTheme(spec: Pick<AppSpec, "theme" | "darkTheme">, scheme: ColorScheme): Record<string, string> {
+  if (scheme === "light") return { ...DEFAULT_THEME, ...(spec.theme ?? {}) };
+  // Light values like `background: #fff` must not leak into dark mode; brand and custom tokens do.
+  const carried = Object.entries(spec.theme ?? {}).filter(([k]) => k === "accent" || !(k in DEFAULT_THEME));
+  return { ...DARK_THEME, ...Object.fromEntries(carried), ...(spec.darkTheme ?? {}) };
+}
+
 export interface TextStyle {
   fontSize: number;
   fontWeight: number;
@@ -94,5 +120,9 @@ export const TYPOGRAPHY: Record<string, TextStyle & { color?: string }> = {
   button: { fontSize: 17, fontWeight: 600, lineHeight: 22 },
 };
 
-/** The one font bundled with every host, so measurements match across platforms. */
-export const FONT_FAMILY = "Inter";
+/**
+ * Hosts render with the platform's own system font (SF, Roboto, the browser's
+ * system-ui). Each host measures with the font it draws with, so layout is exact
+ * per platform; line breaks may differ slightly between platforms.
+ */
+export const FONT_FAMILY = "system-ui";

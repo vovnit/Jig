@@ -1,23 +1,18 @@
-import "@fontsource/inter/400.css";
-import "@fontsource/inter/500.css";
-import "@fontsource/inter/600.css";
-import "@fontsource/inter/700.css";
 import "./style.css";
 import { type AppSpec, type FrameStats, type Op, Runtime } from "@jig/core";
 import { DomHost } from "./host.ts";
 import water from "../../specs/water.json";
 import chores from "../../specs/chores.json";
 import meds from "../../specs/meds.json";
+import showcase from "../../specs/showcase.json";
 
-const APPS = [water, chores, meds] as unknown as AppSpec[];
+const APPS = [water, chores, meds, showcase] as unknown as AppSpec[];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const surface = $<HTMLDivElement>("#surface");
 const specInput = $<HTMLTextAreaElement>("#spec");
 const specStatus = $<HTMLDivElement>("#spec-status");
 
-// Measurement must use the real font, so wait for every weight before the first layout.
-await Promise.all([400, 500, 600, 700].map((w) => document.fonts.load(`${w} 16px Inter`)));
 
 const host = new DomHost(surface);
 const runtime = new Runtime(host);
@@ -28,6 +23,21 @@ let current: AppSpec = APPS[0];
 // ---------- Viewport ----------
 new ResizeObserver(() => runtime.setViewport(surface.clientWidth, surface.clientHeight, [12, 0, 0, 0])).observe(surface);
 runtime.setViewport(surface.clientWidth, surface.clientHeight, [12, 0, 0, 0]);
+
+// ---------- Appearance: follow the system, as the native hosts do ----------
+const darkQuery = matchMedia("(prefers-color-scheme: dark)");
+runtime.setColorScheme(darkQuery.matches ? "dark" : "light");
+darkQuery.addEventListener("change", (e) => {
+  runtime.setColorScheme(e.matches ? "dark" : "light");
+  applyThemeVars();
+});
+
+/** Native-styled controls (toggle, focus ring) and the surface read these. */
+function applyThemeVars(): void {
+  surface.style.setProperty("--jig-accent", runtime.theme.accent);
+  surface.style.setProperty("--jig-off", runtime.theme.border);
+  surface.style.background = runtime.theme.background;
+}
 
 // ---------- App switching ----------
 const list = $<HTMLElement>("#app-list");
@@ -46,7 +56,7 @@ function renderList(): void {
 function open(app: AppSpec): void {
   current = app;
   runtime.load(app, { fresh: true });
-  surface.style.setProperty("--jig-accent", runtime.theme.accent);
+  applyThemeVars();
   specInput.value = JSON.stringify(app, null, 2);
   setStatus();
   renderList();
@@ -68,7 +78,7 @@ specInput.addEventListener("input", () => {
     current = spec;
     if (i >= 0) APPS[i] = spec;
     runtime.load(spec);
-    surface.style.setProperty("--jig-accent", runtime.theme.accent);
+    applyThemeVars();
     setStatus();
   }, 250);
 });
