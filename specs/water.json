@@ -1,0 +1,100 @@
+{
+  "id": "water",
+  "name": "Water",
+  "description": "Count glasses of water against a daily goal.",
+  "theme": { "accent": "#2f80ed" },
+  "data": {
+    "goal": { "type": "number", "default": 8 },
+    "log": { "type": "list", "fields": { "day": "date", "glasses": "number" }, "default": [] }
+  },
+  "state": {},
+  "screens": {
+    "main": {
+      "title": "Water",
+      "body": {
+        "type": "column",
+        "style": { "gap": 24, "align": "center", "paddingTop": 16 },
+        "children": [
+          {
+            "type": "ring",
+            "size": 200,
+            "thickness": 12,
+            "value": "{{(find(log, d => d.day == today()).glasses ?? 0) / goal}}",
+            "label": "{{find(log, d => d.day == today()).glasses ?? 0}} / {{goal}}",
+            "caption": "glasses today"
+          },
+          {
+            "type": "row",
+            "style": { "gap": 12 },
+            "children": [
+              {
+                "type": "button", "label": "−", "variant": "secondary", "style": { "width": 56 },
+                "onTap": {
+                  "set": "log",
+                  "to": "map(log, d => d.day == today() ? {day: d.day, glasses: max(0, d.glasses - 1)} : d)"
+                }
+              },
+              {
+                "type": "button", "label": "+ Glass", "style": { "width": 140 },
+                "onTap": {
+                  "if": "some(log, d => d.day == today())",
+                  "then": { "set": "log", "to": "map(log, d => d.day == today() ? {day: d.day, glasses: d.glasses + 1} : d)" },
+                  "else": { "push": "log", "value": { "day": "today()", "glasses": "1" } }
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "callout",
+            "if": "(find(log, d => d.day == today()).glasses ?? 0) >= goal",
+            "value": "Goal reached. Nice work!",
+            "style": { "color": "success", "fontWeight": 600 }
+          },
+          {
+            "type": "card",
+            "style": { "alignSelf": "stretch" },
+            "children": [
+              { "type": "text", "variant": "headline", "value": "Last 7 days" },
+              {
+                "type": "row",
+                "style": { "height": 96, "gap": 8, "align": "end" },
+                "children": [
+                  {
+                    "type": "column",
+                    "each": "range(7)",
+                    "as": "i",
+                    "style": { "grow": 1, "gap": 4, "align": "center", "justify": "end", "height": "100%" },
+                    "children": [
+                      {
+                        "type": "spacer",
+                        "style": {
+                          "grow": 0,
+                          "width": 20,
+                          "radius": 6,
+                          "height": "{{4 + 60 * min(1, (find(log, d => d.day == addDays(today(), i - 6)).glasses ?? 0) / goal)}}",
+                          "background": "{{i == 6 ? 'accent' : 'border'}}"
+                        }
+                      },
+                      { "type": "text", "variant": "caption", "value": "{{formatDate(addDays(today(), i - 6), 'EEE')}}" }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "row",
+            "style": { "alignSelf": "stretch", "align": "center", "gap": 12 },
+            "children": [
+              { "type": "text", "value": "Daily goal", "style": { "grow": 1 } },
+              { "type": "button", "variant": "secondary", "label": "−", "style": { "width": 44 }, "onTap": { "set": "goal", "to": "max(1, goal - 1)" } },
+              { "type": "text", "variant": "headline", "value": "{{goal}}", "style": { "width": 28, "textAlign": "center" } },
+              { "type": "button", "variant": "secondary", "label": "+", "style": { "width": 44 }, "onTap": { "set": "goal", "to": "goal + 1" } }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

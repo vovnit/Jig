@@ -1,0 +1,113 @@
+{
+  "id": "meds",
+  "name": "Mom's meds",
+  "description": "A medication log for a parent: today's doses, history per medicine.",
+  "theme": { "accent": "#1f9d74" },
+  "data": {
+    "meds": {
+      "type": "list",
+      "fields": { "id": "string", "name": "string", "dose": "string", "time": "string" },
+      "default": [
+        { "id": "m1", "name": "Metformin", "dose": "500 mg", "time": "08:00" },
+        { "id": "m2", "name": "Lisinopril", "dose": "10 mg", "time": "09:00" },
+        { "id": "m3", "name": "Vitamin D", "dose": "1000 IU", "time": "20:00" }
+      ]
+    },
+    "taken": { "type": "list", "fields": { "med": "string", "day": "date", "at": "datetime" }, "default": [] }
+  },
+  "state": { "name": "", "dose": "", "time": "08:00" },
+  "screens": {
+    "today": {
+      "title": "Today",
+      "body": {
+        "type": "column",
+        "style": { "gap": 12 },
+        "children": [
+          { "type": "text", "variant": "callout", "value": "{{formatDate(now(), 'EEE, MMM d')}} · {{count(meds, m => some(taken, t => t.med == m.id && t.day == today()))}} of {{len(meds)}} taken", "style": { "color": "muted" } },
+          {
+            "type": "row",
+            "each": "sort(meds, 'time')",
+            "as": "med",
+            "style": { "gap": 12, "align": "center", "padding": 14, "radius": 16, "background": "surface" },
+            "onTap": { "navigate": "med", "params": { "id": "med.id" } },
+            "children": [
+              { "type": "shape", "path": "@pill", "fill": "accent", "style": { "width": 28, "height": 28 } },
+              {
+                "type": "column",
+                "style": { "grow": 1, "gap": 2 },
+                "children": [
+                  { "type": "text", "variant": "headline", "value": "{{med.name}}" },
+                  { "type": "text", "variant": "caption", "value": "{{med.dose}} · {{med.time}}" }
+                ]
+              },
+              {
+                "type": "toggle",
+                "value": "{{some(taken, t => t.med == med.id && t.day == today())}}",
+                "onChange": {
+                  "if": "value",
+                  "then": { "push": "taken", "value": { "med": "med.id", "day": "today()", "at": "now()" } },
+                  "else": { "remove": "taken", "where": "item.med == med.id && item.day == today()" }
+                }
+              }
+            ]
+          },
+          { "type": "button", "variant": "secondary", "label": "Add medicine", "onTap": { "navigate": "add" } }
+        ]
+      }
+    },
+    "med": {
+      "title": "{{find(meds, m => m.id == params.id).name}}",
+      "body": {
+        "type": "column",
+        "style": { "gap": 12 },
+        "children": [
+          { "type": "text", "variant": "callout", "value": "{{find(meds, m => m.id == params.id).dose}} every day at {{find(meds, m => m.id == params.id).time}}" },
+          { "type": "text", "variant": "headline", "value": "History", "style": { "marginTop": 8 } },
+          {
+            "type": "row",
+            "each": "reverse(filter(taken, t => t.med == params.id))",
+            "as": "t",
+            "key": "t.at",
+            "style": { "justify": "between", "paddingY": 10 },
+            "children": [
+              { "type": "text", "value": "{{formatDate(t.day, 'EEE, MMM d')}}" },
+              { "type": "text", "value": "{{formatDate(t.at, 'HH:mm')}}", "style": { "color": "muted" } }
+            ]
+          },
+          { "type": "text", "if": "count(taken, t => t.med == params.id) == 0", "value": "Not taken yet.", "style": { "color": "muted" } },
+          {
+            "type": "button", "variant": "danger", "label": "Delete medicine", "style": { "marginTop": 16 },
+            "onTap": [{ "set": "meds", "to": "filter(meds, m => m.id != params.id)" }, { "back": true }]
+          }
+        ]
+      }
+    },
+    "add": {
+      "title": "New medicine",
+      "body": {
+        "type": "column",
+        "style": { "gap": 12 },
+        "children": [
+          { "type": "text", "variant": "caption", "value": "Name" },
+          { "type": "textfield", "placeholder": "e.g. Aspirin", "bind": "name" },
+          { "type": "text", "variant": "caption", "value": "Dose" },
+          { "type": "textfield", "placeholder": "e.g. 81 mg", "bind": "dose" },
+          { "type": "text", "variant": "caption", "value": "Time (HH:MM)" },
+          { "type": "textfield", "placeholder": "08:00", "bind": "time" },
+          {
+            "type": "button", "label": "Save", "style": { "marginTop": 8 },
+            "onTap": {
+              "if": "trim(name) != ''",
+              "then": [
+                { "push": "meds", "value": { "id": "uid()", "name": "trim(name)", "dose": "trim(dose)", "time": "time" } },
+                { "set": "name", "to": "''" },
+                { "set": "dose", "to": "''" },
+                { "back": true }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Jig</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="apps">
+        <div class="brand">Jig</div>
+        <nav id="app-list"></nav>
+        <button id="reset" class="ghost">Reset app data</button>
+      </aside>
+      <main class="stage">
+        <div class="phone"><div id="surface"></div></div>
+      </main>
+      <section class="panel">
+        <div class="tabs" id="tabs">
+          <button data-tab="spec" class="active">Spec</button>
+          <button data-tab="ops">Ops</button>
+          <button data-tab="stats">Frame</button>
+          <button data-tab="data">Data</button>
+        </div>
+        <div class="tab" data-tab="spec">
+          <textarea id="spec" spellcheck="false"></textarea>
+          <div id="spec-status" class="status"></div>
+        </div>
+        <pre class="tab hidden" data-tab="ops" id="ops"></pre>
+        <pre class="tab hidden" data-tab="stats" id="stats"></pre>
+        <pre class="tab hidden" data-tab="data" id="data"></pre>
+      </section>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

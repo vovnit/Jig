@@ -1,0 +1,21 @@
+{
+  "name": "jig",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "core",
+    "web"
+  ],
+  "scripts": {
+    "test": "npm test -w core",
+    "build": "npm run build -w core && npm run build -w web",
+    "dev": "npm run dev -w web",
+    "typecheck": "tsc -p core && tsc -p web"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
