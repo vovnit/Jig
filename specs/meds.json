@@ -51,7 +51,7 @@
               }
             ]
           },
-          { "type": "button", "variant": "secondary", "label": "Add medicine", "onTap": { "navigate": "add" } }
+          { "type": "button", "variant": "secondary", "label": "Add medicine", "onTap": { "navigate": "add", "transition": "fade" } }
         ]
       }
     },

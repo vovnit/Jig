@@ -72,7 +72,7 @@ export const SHAPES: Record<string, string> = {
 
 /** Composite controls, built from primitives in the spec format. */
 export const BUILTIN_COMPONENTS: Record<string, NodeSpec> = {
-  // {"type": "progress", "value": "{{done / total}}"}
+  // {"type": "progress", "value": "{{done / total}}"}; "animate": false turns the transition off
   progress: {
     type: "overlay",
     style: { height: "{{props.height ?? 8}}", radius: "{{(props.height ?? 8) / 2}}", background: "{{props.track ?? 'surface'}}", align: "start" },
@@ -85,6 +85,7 @@ export const BUILTIN_COMPONENTS: Record<string, NodeSpec> = {
           radius: "{{(props.height ?? 8) / 2}}",
           background: "{{props.color ?? 'accent'}}",
           grow: 0,
+          transition: "{{props.animate == false ? 0 : 350}}",
         },
       },
     ],
@@ -104,14 +105,17 @@ export const BUILTIN_COMPONENTS: Record<string, NodeSpec> = {
         style: { width: "100%", height: "100%" },
       },
       {
+        // A full circle from 12 o'clock, clockwise, trimmed to the value: hosts animate
+        // the trim natively, which a changing arc path could not do smoothly.
         type: "shape",
         viewBox: "0 0 100 100",
-        path: "{{arc(50, 50, 44, 0, clamp(props.value, 0, 1) * 360)}}",
+        path: "M50 6a44 44 0 1 1 0 88a44 44 0 1 1 0-88",
+        trimEnd: "{{clamp(props.value, 0, 1)}}",
         fill: "none",
         stroke: "{{props.color ?? 'accent'}}",
         strokeWidth: "{{props.thickness ?? 10}}",
         lineCap: "round",
-        style: { width: "100%", height: "100%" },
+        style: { width: "100%", height: "100%", transition: "{{props.animate == false ? 0 : { duration: 500, easing: 'easeOut' }}}" },
       },
       {
         type: "column",

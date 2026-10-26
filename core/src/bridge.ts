@@ -15,7 +15,11 @@ export type Op =
   | ["remove", number, number]
   /** Position relative to the parent: x, y, width, height in points. */
   | ["frame", number, number, number, number, number]
-  /** Imperative command for media and focus: play, pause, focus, scrollTo... */
+  /**
+   * Imperative command: `focus`, or on the root `transition` [kind: "push" | "pop",
+   * style: "slide" | "fade", durationMs]. A host sees the transition before applying
+   * the batch, snapshots the old screen, applies the ops and animates the new screen in.
+   */
   | ["command", number, string, unknown[]];
 
 export interface TextMeasureStyle {

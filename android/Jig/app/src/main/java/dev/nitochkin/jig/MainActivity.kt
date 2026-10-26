@@ -95,7 +95,10 @@ class MainActivity : ComponentActivity() {
     private fun applyTheme(theme: JigRuntime.Theme) {
         renderer.isDark = theme.isDark
         theme.colors["accent"]?.let(AndroidRenderer::color)?.let { renderer.accentColor = it }
-        theme.colors["background"]?.let(AndroidRenderer::color)?.let { window.decorView.setBackgroundColor(it) }
+        theme.colors["background"]?.let(AndroidRenderer::color)?.let {
+            window.decorView.setBackgroundColor(it)
+            renderer.screenBackground = it
+        }
         theme.colors["muted"]?.let(AndroidRenderer::color)?.let { menuButton.imageTintList = ColorStateList.valueOf(it) }
         WindowCompat.getInsetsController(window, surface).apply {
             isAppearanceLightStatusBars = !theme.isDark

@@ -9,11 +9,19 @@ import { BUILTIN_COMPONENTS, COLOR_KEYS, SHAPES, TYPE_ALIASES, defaultStyle } fr
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, setIn, str } from "./expr.ts";
 import { type Box, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, root, untrack } from "./signals.ts";
-import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
+import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
 const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "props"]);
 const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
 const TEXT_METRIC_KEYS = ["fontSize", "fontWeight", "lineHeight"] as const;
+
+interface NavEntry {
+  screen: string;
+  params: Record<string, unknown>;
+  transition?: ScreenTransition;
+}
+
+const SCREEN_TRANSITION_MS = 320;
 
 interface Handlers {
   scope: Scope;
@@ -66,7 +74,7 @@ export class Runtime {
 
   signals = new Map<string, Signal<unknown>>();
   dataKeys = new Set<string>();
-  nav = new Signal<{ screen: string; params: Record<string, unknown> }[]>([]);
+  nav = new Signal<NavEntry[]>([]);
 
   root: ViewNode;
   nodes = new Map<number, ViewNode>();
@@ -115,7 +123,7 @@ export class Runtime {
     this.appOwner?.dispose();
     if (fresh) {
       this.signals.clear();
-      this.nav = new Signal<{ screen: string; params: Record<string, unknown> }[]>([]);
+      this.nav = new Signal<NavEntry[]>([]);
     }
     this.spec = spec;
     this.theme = resolveTheme(spec, this.colorScheme);
@@ -139,6 +147,8 @@ export class Runtime {
     const keepNav = this.nav.peek().filter((e) => spec.screens[e.screen]);
     this.nav.set(keepNav.length ? keepNav : [{ screen: start, params: {} }]);
 
+    // A (hot) reload replaces the screen in place; only navigation animates.
+    this.shownStack = null;
     root(() => {
       this.appOwner = getOwner();
       // Persist data whenever it changes.
@@ -147,8 +157,8 @@ export class Runtime {
         untrack(() => this.requestSave());
       });
       effect(() => {
-        const top = this.nav.get().at(-1);
-        untrack(() => this.showScreen(top?.screen ?? start));
+        const stack = this.nav.get();
+        untrack(() => this.showScreen(stack.at(-1)?.screen ?? start, this.screenTransition(stack)));
       });
     }, null);
     this.scheduleFrame();
@@ -267,14 +277,28 @@ export class Runtime {
   // ---------- Screens ----------
 
   private screenOwner: (() => void) | null = null;
+  private shownStack: NavEntry[] | null = null;
 
-  private showScreen(name: string): void {
+  /** Push or pop, compared with the stack on screen; the pop mirrors how the popped screen came in. */
+  private screenTransition(stack: NavEntry[]): { kind: "push" | "pop"; style: ScreenTransition } | null {
+    const shown = this.shownStack;
+    this.shownStack = stack;
+    if (!shown || shown.length === stack.length) return null;
+    if (stack.length > shown.length) return { kind: "push", style: stack.at(-1)?.transition ?? "slide" };
+    return { kind: "pop", style: shown.at(-1)?.transition ?? "slide" };
+  }
+
+  private showScreen(name: string, transition: { kind: "push" | "pop"; style: ScreenTransition } | null = null): void {
     this.screenOwner?.();
     this.screenOwner = null;
     const screen: ScreenSpec | undefined = this.spec.screens[name];
     if (!screen) {
       this.error(`screens.${name}`, "Unknown screen");
       return;
+    }
+    // Hosts snapshot the old screen before applying this batch, then animate the new one in over it.
+    if (transition && transition.style !== "none") {
+      this.structural.push(["command", this.root.id, "transition", [transition.kind, transition.style, SCREEN_TRANSITION_MS]]);
     }
     root((dispose) => {
       this.screenOwner = dispose;
@@ -568,6 +592,11 @@ export class Runtime {
         node.markDirty();
       }
     }
+    if ("transition" in visual) {
+      const t = normalizeTransition(visual.transition);
+      if (t) visual.transition = t;
+      else delete visual.transition;
+    }
     const box = parseBox(layout);
     // Leaves draw their own content inset (button label, text chip, input text), so the host needs padding.
     if (!isContainer(node.type) && box.padding.some((v) => v !== 0)) visual.padding = box.padding;
@@ -791,7 +820,7 @@ export class Runtime {
         const params: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(a.params ?? {})) params[k] = this.evalValue(v, scope, where);
         if (!this.spec.screens[a.navigate]) return this.error(where, `Unknown screen '${a.navigate}'`);
-        this.nav.set([...this.nav.peek(), { screen: a.navigate, params }]);
+        this.nav.set([...this.nav.peek(), { screen: a.navigate, params, transition: a.transition }]);
       } else if ("back" in a) {
         this.back();
       } else if ("if" in a) {
@@ -884,6 +913,24 @@ export const PRIMITIVE_TYPES = [...PRIMITIVES].filter((t) => t !== "root" && t !
 
 function emptyStats(): FrameStats {
   return { bindingsMs: 0, layoutMs: 0, measureMs: 0, measureCalls: 0, measureCacheHits: 0, layoutCacheHits: 0, skippedSubtrees: 0, applyMs: 0, ops: 0 };
+}
+
+const EASINGS = new Set(["ease", "linear", "easeIn", "easeOut", "spring"]);
+
+/** `style.transition` → `{duration, easing}` for hosts, or null when off. */
+function normalizeTransition(t: unknown): { duration: number; easing: string } | null {
+  if (t === true) return { duration: 250, easing: "ease" };
+  if (typeof t === "number" || (typeof t === "string" && t.trim() !== "" && !isNaN(Number(t)))) {
+    const duration = Number(t);
+    return duration > 0 ? { duration, easing: "ease" } : null;
+  }
+  if (t && typeof t === "object") {
+    const o = t as { duration?: unknown; easing?: unknown };
+    const duration = o.duration === undefined ? 250 : Number(o.duration);
+    const easing = typeof o.easing === "string" && EASINGS.has(o.easing) ? o.easing : "ease";
+    return duration > 0 ? { duration, easing } : null;
+  }
+  return null;
 }
 
 function fontWeightOf(v: unknown): number | undefined {

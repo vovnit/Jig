@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { AppSpec } from "../src/spec.ts";
+import type { Op } from "../src/bridge.ts";
 import { boot, byText, findNode, frame } from "./fake-host.ts";
 
 const load = (name: string): AppSpec => JSON.parse(readFileSync(new URL(`../../specs/${name}.json`, import.meta.url), "utf8"));
@@ -173,4 +174,43 @@ test("dark mode swaps theme tokens, keeps the brand accent and the app's state",
   assert.ok(byText(rt, "Count: 1"));
   const screen = findNode(rt, (_, t) => t === "screen")!;
   assert.equal((screen.props.style as { background: string }).background, "#111316");
+});
+
+test("navigation emits push and pop transitions; reloads and first screens don't", () => {
+  const spec: AppSpec = {
+    id: "nav",
+    name: "Nav",
+    screens: {
+      a: { title: "A", body: { type: "button", label: "Go", onTap: { navigate: "b" } } },
+      b: { title: "B", body: { type: "button", label: "Fade", onTap: { navigate: "c", transition: "fade" } } },
+      c: { title: "C", body: { type: "text", value: "C" } },
+    },
+  };
+  const transitions = (ops: Op[]) => ops.filter((o) => o[0] === "command" && o[2] === "transition").map((o) => o[3]);
+  const { host, rt, ops } = boot(spec);
+  assert.deepEqual(transitions(ops), []);
+  rt.dispatch(byText(rt, "Go")!.id, "tap");
+  assert.deepEqual(transitions(frame(host)), [["push", "slide", 320]]);
+  rt.dispatch(byText(rt, "Fade")!.id, "tap");
+  assert.deepEqual(transitions(frame(host)), [["push", "fade", 320]]);
+  rt.back();
+  assert.deepEqual(transitions(frame(host)), [["pop", "fade", 320]], "a pop mirrors how the screen came in");
+  rt.load(spec);
+  assert.deepEqual(transitions(frame(host)), [], "hot reload keeps the screen without animating");
+});
+
+test("style.transition is normalized for hosts", () => {
+  const spec: AppSpec = {
+    id: "t",
+    name: "T",
+    state: { on: false },
+    screens: { main: { body: { type: "column", children: [
+      { type: "spacer", style: { height: 10, transition: 200, background: "{{on ? 'accent' : 'surface'}}" } },
+      { type: "spacer", style: { height: 10, transition: { duration: 400, easing: "spring" } } },
+      { type: "spacer", style: { height: 10, transition: "{{on ? 300 : 0}}" } },
+    ] } } },
+  };
+  const { rt } = boot(spec);
+  const styles = [...rt.nodes.values()].filter((n) => n.type === "spacer").map((n) => (n.props.style as { transition?: unknown } | undefined)?.transition);
+  assert.deepEqual(styles, [{ duration: 200, easing: "ease" }, { duration: 400, easing: "spring" }, undefined]);
 });

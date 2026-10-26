@@ -98,6 +98,11 @@ A spec has `data` (typed and persisted), `state` (transient UI state), `screens`
 - **Built-in composites** (written in the spec format itself): `card`, `progress`, `ring`, `check`.
 - **Structure:** `if`, `each` / `as` / `key`, `bind` for two-way control values.
 - **Actions:** `set`, `toggle`, `push`, `remove`, `navigate` (with params), `back`, `if` / `then` / `else`. Actions run in order, and each sees the state the previous one wrote.
+- **Motion:**
+  - `navigate` slides the new screen in from the right, and `back` slides it out; `"transition": "fade"` or `"none"` changes that per navigation.
+  - `style.transition` (milliseconds, or `{"duration", "easing"}` with `ease`, `linear`, `easeIn`, `easeOut` or `spring`) animates a node between values: its frame, opacity, colors and shape trim. A node that appears in an existing list fades in.
+  - Shapes take `trimStart` and `trimEnd` (0–1) to draw part of their stroke, which is how `ring` sweeps smoothly. `ring` and `progress` animate by default (`"animate": false` turns it off).
+  - Hosts skip animations when the system asks for reduced motion.
 - **Design tokens:** theme colors (`accent`, `muted`, `surface`, ...) and type variants (`largeTitle`, `title`, `headline`, `body`, `callout`, `caption`) are resolved in the core, so every platform renders the same numbers. Each token has a dark value; hosts follow the system appearance with `runtime.setColorScheme`, and a spec can override either set (`theme`, `darkTheme`).
 
 ### Node kinds
@@ -130,6 +135,7 @@ Native stays "dumb". It receives one batch of ops per frame:
 ```
 
 - Ops: `create`, `update`, `insert` (also moves), `remove` (destroys the subtree), `frame`, `command`. Only frames that actually changed are sent.
+- Animation stays native: a value transition travels as a style prop, and the host animates the node's next frame and style changes itself. A screen change adds a `transition` command to the batch; the host snapshots the old screen before applying the ops and animates the new one in over the snapshot, so the runtime never keeps two screens alive.
 - Events come back with the node id: `runtime.dispatch(id, "tap" | "change" | "submit" | "load", payload)`.
 - Native keeps scroll physics, animations (JS describes a transition, native animates it), and text input: while the user types, native stays the source of truth and the runtime never echoes the value back, so the cursor doesn't jump.
 - The contract is in [`core/src/bridge.ts`](core/src/bridge.ts).

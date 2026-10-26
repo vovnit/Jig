@@ -16,6 +16,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         let view: UIView
         var props: [String: Any] = [:]
         var style: [String: Any] = [:]
+        /// Set after the first render: only later changes animate.
+        var rendered = false
         init(type: String, view: UIView) {
             self.type = type
             self.view = view
@@ -23,6 +25,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     private var nodes: [Int: Node] = [:]
+    /// Nodes created in the batch being applied: they appear without animating their frame.
+    private var createdNow = Set<Int>()
 
     init(surface: UIView) {
         self.surface = surface
@@ -41,6 +45,14 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         guard let data = json.data(using: .utf8),
               let ops = (try? JSONSerialization.jsonObject(with: data)) as? [[Any]]
         else { return }
+        // A screen transition: keep a picture of the old screen to animate away from.
+        let screenTransition = ops.first { $0.count >= 4 && ($0[0] as? String) == "command" && ($0[2] as? String) == "transition" }
+        var snapshot: UIView?
+        if screenTransition != nil, let root = nodes[1]?.view, root.window != nil {
+            snapshot = root.snapshotView(afterScreenUpdates: false)
+            snapshot?.frame = root.frame
+        }
+        createdNow.removeAll()
         for op in ops {
             guard let kind = op.first as? String else { continue }
             switch kind {
@@ -52,14 +64,19 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 update(id: id, props: op[2] as? [String: Any] ?? [:])
             case "insert":
                 guard op.count >= 4, let parent = int(op[1]), let child = int(op[2]), let index = int(op[3]) else { continue }
-                insert(parent: parent, child: child, at: index)
+                insert(parent: parent, child: child, at: index, animated: snapshot == nil)
             case "remove":
                 guard op.count >= 3, let child = int(op[2]) else { continue }
                 remove(id: child)
             case "frame":
                 guard op.count >= 6, let id = int(op[1]), let node = nodes[id] else { continue }
                 let f = CGRect(x: double(op[2]), y: double(op[3]), width: double(op[4]), height: double(op[5]))
-                if node.view.frame != f { node.view.frame = f }
+                guard node.view.frame != f else { continue }
+                if let t = transition(node), node.view.window != nil, !createdNow.contains(id) {
+                    animate(t) { node.view.frame = f }
+                } else {
+                    node.view.frame = f
+                }
             case "command":
                 guard op.count >= 3, let id = int(op[1]), let name = op[2] as? String else { continue }
                 if name == "focus" { nodes[id]?.view.becomeFirstResponder() }
@@ -67,8 +84,98 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 continue
             }
         }
+        if let snapshot, let root = nodes[1]?.view, let args = screenTransition?[3] as? [Any], args.count >= 3 {
+            animateScreens(kind: args[0] as? String ?? "push", style: args[1] as? String ?? "slide",
+                           duration: double(args[2]) / 1000, root: root, snapshot: snapshot)
+        }
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         revealFocusedField()
+    }
+
+    // MARK: - Transitions
+
+    private struct Transition {
+        let duration: TimeInterval
+        let easing: String
+    }
+
+    /// The node's `style.transition` for a change after its first render, unless Reduce Motion is on.
+    private func transition(_ node: Node) -> Transition? {
+        guard node.rendered, !UIAccessibility.isReduceMotionEnabled,
+              let t = node.style["transition"] as? [String: Any],
+              let ms = (t["duration"] as? NSNumber)?.doubleValue, ms > 0
+        else { return nil }
+        return Transition(duration: ms / 1000, easing: t["easing"] as? String ?? "ease")
+    }
+
+    private func animate(_ t: Transition, _ changes: @escaping () -> Void) {
+        let base: UIView.AnimationOptions = [.beginFromCurrentState, .allowUserInteraction]
+        if t.easing == "spring" {
+            UIView.animate(withDuration: t.duration, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0, options: base, animations: changes)
+            return
+        }
+        let curve: UIView.AnimationOptions = switch t.easing {
+        case "linear": .curveLinear
+        case "easeIn": .curveEaseIn
+        case "easeOut": .curveEaseOut
+        default: .curveEaseInOut
+        }
+        UIView.animate(withDuration: t.duration, delay: 0, options: base.union(curve), animations: changes)
+    }
+
+    private func timing(_ t: Transition) -> CAMediaTimingFunction {
+        switch t.easing {
+        case "linear": CAMediaTimingFunction(name: .linear)
+        case "easeIn": CAMediaTimingFunction(name: .easeIn)
+        case "easeOut", "spring": CAMediaTimingFunction(name: .easeOut)
+        default: CAMediaTimingFunction(name: .easeInEaseOut)
+        }
+    }
+
+    /// Push: the new screen slides in from the right over the old one, which drifts left and dims.
+    /// Pop: the reverse. Fade (or Reduce Motion): a cross-dissolve.
+    private func animateScreens(kind: String, style: String, duration: TimeInterval, root: UIView, snapshot: UIView) {
+        let width = root.bounds.width
+        // The root is transparent outside its screen (the safe-area bands); while it moves, make
+        // it opaque so the old screen doesn't show through.
+        root.backgroundColor = surface.backgroundColor
+        let dim = UIView(frame: snapshot.bounds)
+        dim.backgroundColor = .black
+        dim.alpha = 0
+        dim.isUserInteractionEnabled = false
+        let finish: (Bool) -> Void = { _ in
+            snapshot.removeFromSuperview()
+            dim.removeFromSuperview()
+            root.backgroundColor = .clear
+        }
+        let slide = { (changes: @escaping () -> Void) in
+            UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
+                           options: [.allowUserInteraction], animations: changes, completion: finish)
+        }
+        if style == "fade" || UIAccessibility.isReduceMotionEnabled {
+            surface.insertSubview(snapshot, aboveSubview: root)
+            UIView.animate(withDuration: duration * 0.8, animations: { snapshot.alpha = 0 }, completion: finish)
+        } else if kind == "push" {
+            surface.insertSubview(snapshot, belowSubview: root)
+            snapshot.addSubview(dim)
+            root.transform = CGAffineTransform(translationX: width, y: 0)
+            slide {
+                root.transform = .identity
+                snapshot.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
+                dim.alpha = 0.12
+            }
+        } else {
+            surface.insertSubview(snapshot, aboveSubview: root)
+            dim.frame = root.bounds
+            dim.alpha = 0.12
+            root.addSubview(dim)
+            root.transform = CGAffineTransform(translationX: -width * 0.3, y: 0)
+            slide {
+                root.transform = .identity
+                snapshot.transform = CGAffineTransform(translationX: width, y: 0)
+                dim.alpha = 0
+            }
+        }
     }
 
     func revealFocusedField(animated: Bool = true) {
@@ -86,6 +193,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         view.tag = id
         let node = Node(type: type, view: view)
         nodes[id] = node
+        createdNow.insert(id)
         if type == "root" {
             // Below any native chrome the host adds on the surface (the app switcher).
             surface.subviews.filter { $0.tag > 0 }.forEach { $0.removeFromSuperview() }
@@ -110,12 +218,18 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         render(node)
     }
 
-    private func insert(parent: Int, child: Int, at index: Int) {
+    private func insert(parent: Int, child: Int, at index: Int, animated: Bool) {
         guard let p = nodes[parent], let c = nodes[child] else { return }
         let container = (p.view as? JigScrollView)?.content ?? p.view
         if c.view.superview === container, container.subviews.firstIndex(of: c.view) == index { return }
         c.view.removeFromSuperview()
         container.insertSubview(c.view, at: min(index, container.subviews.count))
+        // A node with a value transition fades in when it appears in an existing list.
+        if animated, createdNow.contains(child), !createdNow.contains(parent), let t = transition(c) {
+            let target = c.view.alpha
+            c.view.alpha = 0
+            animate(t) { c.view.alpha = target }
+        }
     }
 
     private func remove(id: Int) {
@@ -186,31 +300,20 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         let p = node.props
         let s = node.style
 
-        // Box styling shared by every view type.
-        let radius = cgFloat(s["radius"]) ?? 0
-        view.layer.cornerRadius = radius
-        // Scroll views must always clip, or scrolled content draws over the header.
-        if node.type != "shape" { view.clipsToBounds = radius > 0 || view is UIScrollView || node.type == "image" }
-        view.layer.borderWidth = cgFloat(s["borderWidth"]) ?? 0
-        view.layer.borderColor = color(s["borderColor"])?.cgColor
-        view.alpha = cgFloat(s["opacity"]) ?? 1
-        // Explicitly clear: a nil background on an opaque-drawing view (UILabel) renders black.
-        if node.type != "toggle" { view.backgroundColor = color(s["background"]) ?? .clear }
-        if s["shadow"] as? Bool == true || (s["shadow"] as? String).map({ !$0.isEmpty }) == true {
-            view.layer.shadowColor = UIColor.black.cgColor
-            view.layer.shadowOpacity = 0.1
-            view.layer.shadowRadius = 8
-            view.layer.shadowOffset = CGSize(width: 0, height: 3)
-            view.clipsToBounds = false
-        } else {
-            view.layer.shadowOpacity = 0
-        }
+        let t = transition(node)
+        node.rendered = true
+        if let t { animate(t) { self.renderBox(node) } } else { renderBox(node) }
 
         switch node.type {
         case "text":
             guard let label = view as? JigTextView else { return }
             label.insets = insets(s["padding"])
-            label.text = NSAttributedString(string: string(p["value"]), attributes: textAttributes(s))
+            let text = NSAttributedString(string: string(p["value"]), attributes: textAttributes(s))
+            if let t, label.text != text {
+                UIView.transition(with: label, duration: t.duration, options: [.transitionCrossDissolve, .beginFromCurrentState]) { label.text = text }
+            } else {
+                label.text = text
+            }
         case "button":
             guard let button = view as? UIButton else { return }
             button.setAttributedTitle(NSAttributedString(string: string(p["label"]), attributes: textAttributes(s, defaultAlign: .center)), for: .normal)
@@ -240,8 +343,9 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             guard let shape = view as? JigShapeView else { return }
             shape.pathData = string(p["path"])
             shape.viewBox = viewBox(p["viewBox"])
-            shape.fill = p["fill"] == nil ? .black : color(p["fill"])
-            shape.stroke = color(p["stroke"])
+            let animation = t.map { (duration: $0.duration, timing: timing($0)) }
+            shape.setColors(fill: p["fill"] == nil ? .black : color(p["fill"]), stroke: color(p["stroke"]), animation: animation)
+            shape.setTrim(start: cgFloat(p["trimStart"]) ?? 0, end: cgFloat(p["trimEnd"]) ?? 1, animation: animation)
             shape.strokeWidth = cgFloat(p["strokeWidth"]) ?? 1
             shape.lineCap = (p["lineCap"] as? String) == "round" ? .round : (p["lineCap"] as? String) == "square" ? .square : .butt
         case "image":
@@ -256,6 +360,31 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         }
         if node.type != "text" { view.isAccessibilityElement = p["tappable"] as? Bool == true }
         if p["tappable"] as? Bool == true { view.accessibilityTraits.insert(.button) }
+    }
+
+    /// Box styling shared by every view type; runs inside an animation block for value transitions.
+    private func renderBox(_ node: Node) {
+        let view = node.view
+        let s = node.style
+        let radius = cgFloat(s["radius"]) ?? 0
+        view.layer.cornerRadius = radius
+        // Scroll views must always clip, or scrolled content draws over the header.
+        if node.type != "shape" { view.clipsToBounds = radius > 0 || view is UIScrollView || node.type == "image" }
+        view.layer.borderWidth = cgFloat(s["borderWidth"]) ?? 0
+        view.layer.borderColor = color(s["borderColor"])?.cgColor
+        view.alpha = cgFloat(s["opacity"]) ?? 1
+        // Explicitly clear: a nil background on an opaque-drawing view (UILabel) renders black.
+        if node.type != "toggle" { view.backgroundColor = color(s["background"]) ?? .clear }
+        if s["shadow"] as? Bool == true || (s["shadow"] as? String).map({ !$0.isEmpty }) == true {
+            view.layer.shadowColor = UIColor.black.cgColor
+            view.layer.shadowOpacity = 0.1
+            view.layer.shadowRadius = 8
+            view.layer.shadowOffset = CGSize(width: 0, height: 3)
+            view.clipsToBounds = false
+        } else {
+            view.layer.shadowOpacity = 0
+        }
+
     }
 
     // MARK: - Events

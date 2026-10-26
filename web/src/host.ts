@@ -5,6 +5,14 @@ import { type Host, type Op, type Props, type Runtime, type Size, type TextMeasu
 
 type Style = Record<string, unknown>;
 
+const EASING: Record<string, string> = {
+  ease: "cubic-bezier(.4,0,.2,1)",
+  linear: "linear",
+  easeIn: "cubic-bezier(.4,0,1,1)",
+  easeOut: "cubic-bezier(0,0,.2,1)",
+  spring: "cubic-bezier(.34,1.56,.64,1)",
+};
+
 export class DomHost implements Host {
   runtime!: Runtime;
   private els = new Map<number, HTMLElement>();
@@ -61,6 +69,13 @@ export class DomHost implements Host {
   }
 
   apply(ops: Op[]): void {
+    // A screen transition: keep a picture of the old screen to animate away from.
+    const transition = ops.find((op) => op[0] === "command" && op[2] === "transition") as
+      | ["command", number, string, [kind: "push" | "pop", style: string, duration: number]]
+      | undefined;
+    const rootEl = this.els.get(1);
+    const snapshot = transition && rootEl ? (rootEl.cloneNode(true) as HTMLElement) : null;
+    this.createdNow.clear();
     for (const op of ops) {
       switch (op[0]) {
         case "create":
@@ -84,6 +99,11 @@ export class DomHost implements Host {
             }
           }
           if (child.parentElement !== parent || child.nextElementSibling !== ref) parent.insertBefore(child, ref);
+          // A node with a value transition fades in when it appears in an existing list.
+          const transitionMs = (this.transitions.get(op[2]) ?? 0);
+          if (transitionMs && this.createdNow.has(op[2]) && !this.createdNow.has(op[1]) && !snapshot) {
+            child.animate([{ opacity: 0 }, { opacity: getComputedStyle(child).opacity }], { duration: transitionMs, easing: EASING.ease });
+          }
           break;
         }
         case "remove": {
@@ -108,7 +128,43 @@ export class DomHost implements Host {
         }
       }
     }
+    if (transition && snapshot && rootEl) this.animateScreens(transition[3], rootEl, snapshot);
     this.onApply?.(ops);
+  }
+
+  private readonly createdNow = new Set<number>();
+  /** Value transition durations by node, for fading in new list items. */
+  private readonly transitions = new Map<number, number>();
+
+  private animateScreens([kind, style, duration]: [string, string, number], rootEl: HTMLElement, snapshot: HTMLElement): void {
+    const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const w = rootEl.offsetWidth;
+    // The root is transparent outside its screen (the inset bands); while it moves, make it
+    // opaque so the old screen doesn't show through.
+    rootEl.style.backgroundColor = getComputedStyle(this.surface).backgroundColor;
+    const done = () => {
+      snapshot.remove();
+      rootEl.style.backgroundColor = "";
+    };
+    snapshot.classList.add("jig-snapshot");
+    snapshot.removeAttribute("data-id");
+    for (const c of snapshot.querySelectorAll("[data-id]")) c.removeAttribute("data-id");
+    const opts: KeyframeAnimationOptions = { duration, easing: "cubic-bezier(.2,.8,.2,1)" };
+    if (style === "fade" || reduce) {
+      rootEl.after(snapshot);
+      snapshot.animate([{ opacity: 1 }, { opacity: 0 }], opts).finished.then(done);
+    } else if (kind === "push") {
+      // The new screen slides in from the right over the old one, which drifts left and dims.
+      rootEl.before(snapshot);
+      rootEl.animate([{ transform: `translateX(${w}px)` }, { transform: "none" }], opts);
+      snapshot
+        .animate([{ transform: "none", filter: "brightness(1)" }, { transform: `translateX(${-w * 0.3}px)`, filter: "brightness(.85)" }], opts)
+        .finished.then(done);
+    } else {
+      rootEl.after(snapshot);
+      rootEl.animate([{ transform: `translateX(${-w * 0.3}px)`, filter: "brightness(.85)" }, { transform: "none", filter: "brightness(1)" }], opts);
+      snapshot.animate([{ transform: "none" }, { transform: `translateX(${w}px)` }], opts).finished.then(done);
+    }
   }
 
   private forget(el: HTMLElement): void {
@@ -184,6 +240,7 @@ export class DomHost implements Host {
       default:
         el = document.createElement("div");
     }
+    this.createdNow.add(id);
     el.classList.add("jig", `jig-${type}`);
     el.dataset.id = String(id);
     this.els.set(id, el);
@@ -237,6 +294,15 @@ export class DomHost implements Host {
             });
           }
           break;
+        case "trimStart":
+        case "trimEnd":
+          if (type === "shape") {
+            const t = this.trims.get(id) ?? [0, 1];
+            t[k === "trimStart" ? 0 : 1] = v == null ? (k === "trimStart" ? 0 : 1) : Number(v);
+            this.trims.set(id, t);
+            this.applyTrim(el, t);
+          }
+          break;
         case "path":
         case "fill":
         case "stroke":
@@ -247,6 +313,19 @@ export class DomHost implements Host {
           break;
       }
     }
+  }
+
+  private readonly trims = new Map<number, [number, number]>();
+
+  /** Stroke trimming as in Core Animation: a dash over a path normalized to length 1. */
+  private applyTrim(el: HTMLElement, [start, end]: [number, number]): void {
+    const path = el.firstElementChild as SVGPathElement;
+    path.setAttribute("pathLength", "1");
+    const len = Math.max(0, end - start);
+    path.style.strokeDasharray = `${len} 2`;
+    path.style.strokeDashoffset = String(-start);
+    // A zero-length dash with round caps would still draw a dot.
+    path.style.strokeOpacity = len > 0.0001 ? "" : "0";
   }
 
   private applyShape(el: HTMLElement, k: string, v: unknown): void {
@@ -280,6 +359,22 @@ export class DomHost implements Host {
         case "fontWeight": st.fontWeight = String(val); break;
         case "lineHeight": st.lineHeight = val === "" ? "" : `${val}px`; break;
         case "padding": st.padding = Array.isArray(val) ? val.map((p) => `${p}px`).join(" ") : ""; break;
+        case "transition": {
+          const t = val === "" ? null : (val as { duration: number; easing: string });
+          const id = Number(el.dataset.id);
+          if (t) this.transitions.set(id, t.duration);
+          else this.transitions.delete(id);
+          const timing = t ? ` ${t.duration}ms ${EASING[t.easing] ?? EASING.ease}` : "";
+          st.transition = t
+            ? ["translate", "width", "height", "background-color", "opacity", "color", "border-radius", "outline-color"].map((p) => p + timing).join(", ")
+            : "";
+          if (type === "shape") {
+            (el.firstElementChild as SVGPathElement).style.transition = t
+              ? ["stroke-dasharray", "stroke-dashoffset", "stroke-opacity", "fill", "stroke"].map((p) => p + timing).join(", ")
+              : "";
+          }
+          break;
+        }
         case "shadow": st.boxShadow = val === "" || val === false ? "" : "0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.08)"; break;
       }
     }

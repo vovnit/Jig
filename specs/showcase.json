@@ -49,7 +49,8 @@
       "sparkle",
       "home",
       "edit"
-    ]
+    ],
+    "moved": false
   },
   "screens": {
     "main": {
@@ -219,6 +220,54 @@
           {
             "type": "text",
             "variant": "headline",
+            "value": "Motion"
+          },
+          {
+            "type": "row",
+            "style": {
+              "height": 52,
+              "padding": 6,
+              "radius": 26,
+              "background": "surface",
+              "justify": "{{moved ? 'end' : 'start'}}"
+            },
+            "onTap": {
+              "toggle": "moved"
+            },
+            "children": [
+              {
+                "type": "overlay",
+                "style": {
+                  "width": "{{moved ? 120 : 40}}",
+                  "height": 40,
+                  "radius": 20,
+                  "background": "{{moved ? 'success' : 'accent'}}",
+                  "transition": {
+                    "duration": 450,
+                    "easing": "spring"
+                  }
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "variant": "caption",
+                    "value": "{{moved ? 'Spring!' : ''}}",
+                    "style": {
+                      "color": "onAccent",
+                      "fontWeight": 600
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "progress",
+            "value": "{{moved ? 0.8 : 0.2}}"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
             "value": "Text"
           },
           {
@@ -281,7 +330,7 @@
             "type": "text",
             "each": "notes",
             "as": "n",
-            "value": "\u2022 {{n.text}}"
+            "value": "• {{n.text}}"
           },
           {
             "type": "row",

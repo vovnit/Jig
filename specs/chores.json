@@ -56,7 +56,7 @@
                 "type": "row",
                 "each": "chores",
                 "as": "chore",
-                "style": { "align": "center", "gap": 12, "padding": 12, "radius": 14, "background": "{{chore.done ? 'surface' : 'background'}}", "borderWidth": 1, "borderColor": "border" },
+                "style": { "align": "center", "gap": 12, "padding": 12, "radius": 14, "background": "{{chore.done ? 'surface' : 'background'}}", "borderWidth": 1, "borderColor": "border", "transition": 200 },
                 "onTap": [
                   { "toggle": "chore.done" },
                   { "set": "stars", "to": "chore.done ? stars + 1 : max(0, stars - 1)" }

@@ -6,6 +6,12 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PathMeasure
+import android.graphics.Color
+import android.animation.ArgbEvaluator
+import android.animation.TimeInterpolator
+import android.animation.ValueAnimator
+import androidx.core.animation.doOnEnd
 import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
@@ -103,7 +109,30 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
     private var layout: StaticLayout? = null
 
     var text = ""
-        set(v) { if (field != v) { field = v; invalidateLayout() } }
+        private set
+    /** The previous text while it cross-fades out (value transitions). */
+    private var fading: StaticLayout? = null
+    private var fade = 1f
+    private var fadeAnimator: ValueAnimator? = null
+
+    fun setText(value: String, crossfade: Long = 0) {
+        if (text == value) return
+        fadeAnimator?.cancel()
+        fading = if (crossfade > 0) layout else null
+        text = value
+        invalidateLayout()
+        if (fading != null) {
+            fadeAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = crossfade
+                addUpdateListener {
+                    fade = it.animatedValue as Float
+                    invalidate()
+                }
+                doOnEnd { fading = null; fade = 1f }
+                start()
+            }
+        }
+    }
     private var fontSize = 17.0
     private var fontWeight = 400
     private var lineHeight = 22.0
@@ -142,11 +171,27 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
         // Frames and padding are rounded to whole pixels separately, so the box can come out a
         // pixel narrower than the measured text; one dp of slack keeps the measured line breaks.
         val width = width - paddingLeft - paddingRight + d.roundToInt()
-        if (text.isEmpty() || width <= 0) return
+        if (width <= 0) return
+        if (text.isEmpty()) {
+            fading?.let { drawLayout(canvas, it) }
+            return
+        }
         val l = layout ?: run {
             TextStyle.configure(paint, fontSize, fontWeight, d)
             TextStyle.layout(text, paint, (lineHeight * d).roundToInt(), width, align).also { layout = it }
         }
+        val color = paint.color
+        fading?.let {
+            paint.alpha = ((1 - fade) * Color.alpha(color)).toInt()
+            drawLayout(canvas, it)
+            paint.color = color
+            paint.alpha = (fade * Color.alpha(color)).toInt()
+        }
+        drawLayout(canvas, l)
+        paint.color = color
+    }
+
+    private fun drawLayout(canvas: Canvas, l: StaticLayout) {
         canvas.save()
         val free = height - paddingTop - paddingBottom - l.height
         canvas.translate(paddingLeft.toFloat(), paddingTop + if (isButton) free / 2f else 0f)
@@ -177,10 +222,47 @@ class JigShapeView(context: Context) : View(context) {
         }
     var viewBox = RectF(0f, 0f, 24f, 24f)
         set(v) { if (field != v) { field = v; invalidate() } }
-    var fill: Int? = 0xFF000000.toInt()
-        set(v) { field = v; invalidate() }
-    var stroke: Int? = null
-        set(v) { field = v; invalidate() }
+    private var fill: Int? = 0xFF000000.toInt()
+    private var stroke: Int? = null
+    private var trimStart = 0f
+    private var trimEnd = 1f
+    private val measure = PathMeasure()
+    private val segment = Path()
+    private var animator: ValueAnimator? = null
+
+    /** Colors and stroke trim (0..1), animated together when the node has a value transition. */
+    fun setColors(fill: Int?, stroke: Int?, animation: Pair<Long, TimeInterpolator>?) = update(fill, stroke, trimStart, trimEnd, animation)
+    fun setTrim(start: Float, end: Float, animation: Pair<Long, TimeInterpolator>?) = update(fill, stroke, start, end, animation)
+
+    private fun update(fill: Int?, stroke: Int?, start: Float, end: Float, animation: Pair<Long, TimeInterpolator>?) {
+        if (fill == this.fill && stroke == this.stroke && start == trimStart && end == trimEnd) return
+        animator?.cancel()
+        if (animation == null) {
+            this.fill = fill
+            this.stroke = stroke
+            trimStart = start
+            trimEnd = end
+            invalidate()
+            return
+        }
+        val from = floatArrayOf(trimStart, trimEnd)
+        val fromFill = this.fill ?: Color.TRANSPARENT
+        val fromStroke = this.stroke ?: Color.TRANSPARENT
+        val argb = ArgbEvaluator()
+        animator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = animation.first
+            interpolator = animation.second
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                trimStart = from[0] + (start - from[0]) * f
+                trimEnd = from[1] + (end - from[1]) * f
+                this@JigShapeView.fill = fill?.let { c -> argb.evaluate(f, fromFill, c) as Int }
+                this@JigShapeView.stroke = stroke?.let { c -> argb.evaluate(f, fromStroke, c) as Int }
+                invalidate()
+            }
+            start()
+        }
+    }
     var strokeWidth = 1f
         set(v) { field = v; invalidate() }
     var lineCap = Paint.Cap.BUTT
@@ -203,7 +285,25 @@ class JigShapeView(context: Context) : View(context) {
             strokePaint.color = it
             strokePaint.strokeWidth = strokeWidth * scale
             strokePaint.strokeCap = lineCap
-            canvas.drawPath(scaled, strokePaint)
+            if (trimStart <= 0f && trimEnd >= 1f) {
+                canvas.drawPath(scaled, strokePaint)
+            } else if (trimEnd > trimStart) {
+                // Stroke trimming as in Core Animation: draw only that fraction of the path.
+                measure.setPath(scaled, false)
+                segment.reset()
+                var offset = 0f
+                var total = 0f
+                do total += measure.length while (measure.nextContour())
+                measure.setPath(scaled, false)
+                do {
+                    val len = measure.length
+                    val a = (trimStart * total - offset).coerceIn(0f, len)
+                    val b = (trimEnd * total - offset).coerceIn(0f, len)
+                    if (b > a) measure.getSegment(a, b, segment, true)
+                    offset += len
+                } while (measure.nextContour())
+                canvas.drawPath(segment, strokePaint)
+            }
         }
     }
 }

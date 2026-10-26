@@ -76,14 +76,37 @@ final class JigShapeView: UIView {
     var viewBox = CGRect(x: 0, y: 0, width: 24, height: 24) { didSet { setNeedsLayout() } }
     var strokeWidth: CGFloat = 1 { didSet { setNeedsLayout() } }
 
-    var fill: UIColor? = .black { didSet { shape.fillColor = fill?.cgColor } }
-    var stroke: UIColor? { didSet { shape.strokeColor = stroke?.cgColor } }
+    typealias Animation = (duration: TimeInterval, timing: CAMediaTimingFunction)
+
+    func setColors(fill: UIColor?, stroke: UIColor?, animation: Animation?) {
+        set("fillColor", fill?.cgColor, animation) { shape.fillColor = fill?.cgColor }
+        set("strokeColor", stroke?.cgColor, animation) { shape.strokeColor = stroke?.cgColor }
+    }
+
+    /// Stroke trimming (0...1): how the ring shows its value, and animates it.
+    func setTrim(start: CGFloat, end: CGFloat, animation: Animation?) {
+        if shape.strokeStart != start { set("strokeStart", start, animation) { shape.strokeStart = start } }
+        if shape.strokeEnd != end { set("strokeEnd", end, animation) { shape.strokeEnd = end } }
+    }
+
+    /// A view's backing layer doesn't animate implicitly, so animate explicitly from what's on screen.
+    private func set(_ key: String, _ value: Any?, _ animation: Animation?, apply: () -> Void) {
+        if let animation {
+            let a = CABasicAnimation(keyPath: key)
+            a.fromValue = (shape.presentation() ?? shape).value(forKey: key)
+            a.toValue = value
+            a.duration = animation.duration
+            a.timingFunction = animation.timing
+            shape.add(a, forKey: key)
+        }
+        apply()
+    }
     var lineCap: CAShapeLayerLineCap = .butt { didSet { shape.lineCap = lineCap } }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         backgroundColor = .clear
-        shape.fillColor = fill?.cgColor
+        shape.fillColor = UIColor.black.cgColor
         shape.strokeColor = nil
     }
 

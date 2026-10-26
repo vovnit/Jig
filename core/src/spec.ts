@@ -6,11 +6,21 @@ export type Action =
   | { toggle: string }
   | { push: string; value: string | Record<string, unknown> }
   | { remove: string; at?: string; where?: string }
-  | { navigate: string; params?: Record<string, string> }
+  | { navigate: string; params?: Record<string, string>; transition?: ScreenTransition }
   | { back: true }
   | { if: string; then: Action | Action[]; else?: Action | Action[] };
 
 export type Actions = Action | Action[];
+
+/** How a screen enters on `navigate` (and leaves again on `back`). Default "slide". */
+export type ScreenTransition = "slide" | "fade" | "none";
+
+/**
+ * Animating between values: `style.transition` makes the host animate a node's
+ * frame, opacity, colors and shape trim when they change, and fade it in when it
+ * appears in a list. A number is a duration in ms; `true` means 250ms.
+ */
+export type ValueTransition = number | boolean | { duration?: number; easing?: "ease" | "linear" | "easeIn" | "easeOut" | "spring" };
 
 export interface NodeSpec {
   type: string;
