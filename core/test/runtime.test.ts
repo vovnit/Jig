@@ -81,6 +81,70 @@ test("data persists to the host database and is restored", () => {
   assert.equal(boot(counter, host.db).rt.get("n"), 0);
 });
 
+const vaultApp: AppSpec = {
+  id: "vault",
+  name: "Vault",
+  data: { token: { type: "string", secret: true }, note: { type: "string" } },
+  screens: {
+    main: {
+      body: {
+        type: "column",
+        children: [
+          { type: "text", value: "{{token ? 'Token set' : 'No token'}}" },
+          { type: "button", label: "Save", onTap: [{ set: "token", to: "'abc123'" }, { set: "note", to: "'hi'" }] },
+          { type: "button", label: "Forget", onTap: { set: "token", to: "''" } },
+        ],
+      },
+    },
+  },
+};
+
+test("secret fields live in secure storage, never in the database", () => {
+  const { host, rt } = boot(vaultApp);
+  rt.dispatch(byText(rt, "Save")!.id, "tap");
+  frame(host);
+  assert.equal(host.vault.get("vault/token"), '"abc123"');
+  assert.deepEqual(host.db.query("SELECT key FROM jig_values WHERE app = 'vault'"), [{ key: "note" }]);
+  assert.ok(!JSON.stringify(host.db.query("SELECT * FROM jig_values")).includes("abc123"));
+
+  const again = boot(vaultApp, host.db, host.vault);
+  assert.equal(again.rt.get("token"), "abc123");
+  assert.ok(byText(again.rt, "Token set"));
+
+  // An empty value deletes the secret; a reset clears them all.
+  again.rt.dispatch(byText(again.rt, "Forget")!.id, "tap");
+  frame(again.host);
+  assert.equal(host.vault.has("vault/token"), false);
+  again.rt.set("token", "xyz");
+  frame(again.host);
+  again.rt.resetData();
+  frame(again.host);
+  assert.equal(host.vault.size, 0);
+});
+
+test("a field that becomes secret moves out of the database", () => {
+  const plain = structuredClone(vaultApp);
+  plain.data!.token.secret = false;
+  const { host, rt } = boot(plain);
+  rt.dispatch(byText(rt, "Save")!.id, "tap");
+  frame(host);
+  assert.equal(host.db.query("SELECT count(*) AS n FROM jig_values WHERE key = 'token'")[0].n, 1);
+
+  const again = boot(vaultApp, host.db, host.vault);
+  assert.equal(again.rt.get("token"), "abc123");
+  assert.equal(host.db.query("SELECT count(*) AS n FROM jig_values WHERE key = 'token'")[0].n, 0);
+  assert.equal(host.vault.get("vault/token"), '"abc123"');
+
+  // The same on a hot reload, while the app is running.
+  const live = boot(plain, host.db, new Map());
+  live.rt.set("token", "live");
+  frame(live.host);
+  live.rt.load(vaultApp);
+  frame(live.host);
+  assert.equal(host.db.query("SELECT count(*) AS n FROM jig_values WHERE key = 'token'")[0].n, 0);
+  assert.equal(live.host.vault.get("vault/token"), '"live"');
+});
+
 test("hot reload keeps state and rebuilds the view", () => {
   const { host, rt } = boot(counter);
   rt.dispatch(byText(rt, "Add")!.id, "tap");

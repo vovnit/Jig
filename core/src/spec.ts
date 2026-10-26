@@ -47,6 +47,11 @@ export interface FieldSpec {
   /** For lists: shape of each item. */
   fields?: Record<string, FieldSpec | FieldSpec["type"]>;
   description?: string;
+  /**
+   * Kept in the platform's secure storage (Keychain, Android Keystore) instead of the
+   * database, so it never reaches the shared data store. An empty value deletes it.
+   */
+  secret?: boolean;
 }
 
 export interface ScreenSpec {

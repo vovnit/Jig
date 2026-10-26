@@ -115,7 +115,7 @@ host.onApply = (ops: Op[]) => {
   if (ops.length > 200) lines.push(`… ${ops.length - 200} more`);
   opsView.textContent = `Last batch: ${ops.length} ops\n\n${lines.join("\n")}`;
   const data: Record<string, unknown> = {};
-  for (const k of runtime.dataKeys) data[k] = runtime.get(k);
+  for (const k of runtime.dataKeys) data[k] = runtime.secretKeys.has(k) && runtime.get(k) ? "•••• (secret)" : runtime.get(k);
   dataView.textContent = JSON.stringify(data, null, 2);
 };
 

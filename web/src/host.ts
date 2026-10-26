@@ -30,6 +30,27 @@ export class DomHost implements Host {
 
   db?: Database;
 
+  /**
+   * Browsers have no synchronous secure storage, so the playground keeps secrets in
+   * sessionStorage: they survive a reload but not closing the tab. Not encrypted.
+   */
+  secrets = {
+    get(app: string, key: string): string | null {
+      try {
+        return sessionStorage.getItem(`jig-secret:${app}/${key}`);
+      } catch {
+        return null;
+      }
+    },
+    set(app: string, key: string, value: string | null): void {
+      if (value == null) sessionStorage.removeItem(`jig-secret:${app}/${key}`);
+      else sessionStorage.setItem(`jig-secret:${app}/${key}`, value);
+    },
+    clear(app: string): void {
+      for (const k of Object.keys(sessionStorage)) if (k.startsWith(`jig-secret:${app}/`)) sessionStorage.removeItem(k);
+    },
+  };
+
   requestFrame(cb: () => void): void {
     requestAnimationFrame(cb);
   }
@@ -269,6 +290,10 @@ export class DomHost implements Host {
           break;
         case "keyboard":
           el.setAttribute("inputmode", v === "number" ? "decimal" : "text");
+          break;
+        case "secure":
+          (el as HTMLInputElement).type = v ? "password" : "text";
+          (el as HTMLInputElement).autocomplete = v ? "current-password" : "off";
           break;
         case "src":
           (el as HTMLImageElement).src = String(v ?? "");

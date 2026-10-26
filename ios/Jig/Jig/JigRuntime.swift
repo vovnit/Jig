@@ -128,6 +128,10 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         let database = SQLiteDatabase.standard()
         let sqlQuery: @convention(block) (String, String) -> String = { sql, params in database.query(sql, paramsJSON: params) }
         let sqlExec: @convention(block) (String) -> String = { statements in database.exec(statements) }
+        let secretGet: @convention(block) (String, String) -> String? = { app, key in SecretStore.get(app: app, key: key) }
+        let secretSet: @convention(block) (String, String, String) -> String? = { app, key, value in SecretStore.set(app: app, key: key, value: value) }
+        let secretDelete: @convention(block) (String, String) -> String? = { app, key in SecretStore.delete(app: app, key: key) }
+        let secretClear: @convention(block) (String) -> String? = { app in SecretStore.clear(app: app) }
         let now: @convention(block) () -> Double = { CACurrentMediaTime() * 1000 }
         let log: @convention(block) (String, String) -> Void = { level, message in NSLog("[jig] %@: %@", level, message) }
 
@@ -137,6 +141,10 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         native.setObject(requestFrame, forKeyedSubscript: "requestFrame" as NSString)
         native.setObject(sqlQuery, forKeyedSubscript: "sqlQuery" as NSString)
         native.setObject(sqlExec, forKeyedSubscript: "sqlExec" as NSString)
+        native.setObject(secretGet, forKeyedSubscript: "secretGet" as NSString)
+        native.setObject(secretSet, forKeyedSubscript: "secretSet" as NSString)
+        native.setObject(secretDelete, forKeyedSubscript: "secretDelete" as NSString)
+        native.setObject(secretClear, forKeyedSubscript: "secretClear" as NSString)
         native.setObject(now, forKeyedSubscript: "now" as NSString)
         native.setObject(log, forKeyedSubscript: "log" as NSString)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)

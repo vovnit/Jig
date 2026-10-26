@@ -521,9 +521,17 @@ class AndroidRenderer(private val surface: JigLayout) {
                 f.setHintTextColor((textColor and 0x00FFFFFF) or 0x80000000.toInt())
                 f.highlightColor = (accentColor and 0x00FFFFFF) or 0x55000000
                 f.hint = str(p["placeholder"])
-                val type = if (p["keyboard"] == "number") InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
-                else InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                if (f.inputType != type) f.inputType = type
+                // A secure field masks its text and stays out of suggestions and the keyboard's learning.
+                val type = when {
+                    p["secure"] == true -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                    p["keyboard"] == "number" -> InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+                    else -> InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+                }
+                if (f.inputType != type) {
+                    f.inputType = type
+                    // A password input type switches the field to a monospace font; keep ours.
+                    f.typeface = TextStyle.typeface((num(s["fontWeight"]) ?: 400.0).toInt())
+                }
                 // Native owns the text while the user types; only apply values from the runtime that differ.
                 val value = str(p["value"])
                 if (f.text.toString() != value) {

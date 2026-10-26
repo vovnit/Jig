@@ -9,9 +9,16 @@
 //   requestFrame()                              call __jigFrame() before the next paint
 //   sqlQuery(sql, paramsJson) -> json            {"rows": [...]} or {"error": "..."}
 //   sqlExec(statementsJson) -> json              [[sql, params?], ...] in one transaction
+//   secretGet(app, key) -> string | null          Keychain / Android Keystore
+//   secretSet(app, key, value) -> error | null, secretDelete(app, key) -> error | null
+//   secretClear(app) -> error | null
 //   now() -> milliseconds, log(level, message)
 
 var __frameQueue = [];
+
+function check(error) {
+  if (error) throw new Error(error);
+}
 
 function sqlResult(json) {
   var r = JSON.parse(json);
@@ -36,6 +43,13 @@ var host = {
   db: {
     query: function (sql, params) { return sqlResult(__native.sqlQuery(sql, JSON.stringify(params || []))); },
     exec: function (statements) { sqlResult(__native.sqlExec(JSON.stringify(statements))); }
+  },
+  secrets: {
+    get: function (app, key) { return __native.secretGet(app, key); },
+    set: function (app, key, value) {
+      check(value == null ? __native.secretDelete(app, key) : __native.secretSet(app, key, value));
+    },
+    clear: function (app) { check(__native.secretClear(app)); }
   },
   now: function () { return __native.now(); },
   log: function (level, message) { __native.log(level, message); }

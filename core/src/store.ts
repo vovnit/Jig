@@ -94,6 +94,22 @@ export class DataStore {
     for (const [key, s] of next) this.saved.set(key, s);
   }
 
+  /** Whether the key was read or written in this session. */
+  has(key: string): boolean {
+    return this.saved.has(key);
+  }
+
+  /** Deletes these keys of this app. */
+  remove(keys: string[]): void {
+    this.db.exec(
+      keys.flatMap((key): Statement[] => [
+        [DELETE_ITEMS, [this.app, key]],
+        ["DELETE FROM jig_values WHERE app = ? AND key = ?", [this.app, key]],
+      ]),
+    );
+    for (const key of keys) this.saved.delete(key);
+  }
+
   /** Deletes every stored key of this app. */
   clear(): void {
     this.db.exec([

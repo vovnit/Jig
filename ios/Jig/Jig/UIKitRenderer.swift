@@ -435,6 +435,13 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 attributes: [.font: attrs[.font] as Any, .foregroundColor: UIColor.placeholderText]
             )
             field.keyboardType = (p["keyboard"] as? String) == "number" ? .decimalPad : .default
+            // A secure field masks its text and keeps it out of autocorrect and the clipboard.
+            let secure = (p["secure"] as? Bool) ?? false
+            if field.isSecureTextEntry != secure {
+                field.isSecureTextEntry = secure
+                field.autocorrectionType = secure ? .no : .default
+                field.textContentType = secure ? .password : nil
+            }
             field.keyboardAppearance = isDark ? .dark : .light
             // Native owns the text while the user types; only apply values from the runtime that differ.
             let value = string(p["value"])

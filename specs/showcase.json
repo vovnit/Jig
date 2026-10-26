@@ -10,6 +10,11 @@
         "text": "string"
       },
       "default": []
+    },
+    "apiKey": {
+      "type": "string",
+      "secret": true,
+      "description": "Kept in the Keychain or Android Keystore, never in the database."
     }
   },
   "state": {
@@ -50,7 +55,8 @@
       "home",
       "edit"
     ],
-    "moved": false
+    "moved": false,
+    "keyDraft": ""
   },
   "screens": {
     "main": {
@@ -366,6 +372,75 @@
                 "onTap": {
                   "set": "notes",
                   "to": "[]"
+                }
+              }
+            ]
+          },
+          {
+            "type": "divider"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Secret (secure storage)"
+          },
+          {
+            "type": "text",
+            "style": {
+              "color": "muted"
+            },
+            "value": "{{apiKey ? 'An API key is saved in secure storage.' : 'No API key saved.'}}"
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "textfield",
+                "secure": true,
+                "placeholder": "API key",
+                "bind": "keyDraft",
+                "onSubmit": {
+                  "if": "trim(keyDraft) != ''",
+                  "then": [
+                    {
+                      "set": "apiKey",
+                      "to": "trim(keyDraft)"
+                    },
+                    {
+                      "set": "keyDraft",
+                      "to": "''"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "button",
+                "label": "Save",
+                "onTap": {
+                  "if": "trim(keyDraft) != ''",
+                  "then": [
+                    {
+                      "set": "apiKey",
+                      "to": "trim(keyDraft)"
+                    },
+                    {
+                      "set": "keyDraft",
+                      "to": "''"
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "button",
+                "if": "apiKey",
+                "label": "Forget",
+                "variant": "secondary",
+                "onTap": {
+                  "set": "apiKey",
+                  "to": "''"
                 }
               }
             ]

@@ -111,7 +111,13 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 
 - A scalar or object key is one row in `jig_values`. A list is one row per item in `jig_items`, keyed by the item's `id` (or its position when it has none), with the item as JSON text, so `json_extract` can query it.
 - Updates are immutable, so after each frame the runtime writes only the items whose references changed, in one transaction. Adding a chore writes one row.
-- `runtime.resetData()` deletes an app's rows and starts it again from the spec defaults.
+- `runtime.resetData()` deletes an app's rows and secrets and starts it again from the spec defaults.
+
+**Secrets.** A data field marked `"secret": true` (an API key, a PIN) skips the database, and with it the shared data store: it lives in the iOS Keychain (on this device only, readable after the first unlock), or on Android encrypted with an AES-GCM key held in the Android Keystore. The web playground has no synchronous secure storage, so it keeps secrets in `sessionStorage`, unencrypted, for the tab's lifetime. An empty value deletes the secret; a field that becomes secret moves out of the database on the next save. A `textfield` with `"secure": true` masks its input and keeps it out of autocorrect and suggestions; the inspector shows secrets masked.
+
+```json
+"data": { "apiKey": { "type": "string", "secret": true } }
+```
 
 ### Node kinds
 
@@ -193,6 +199,7 @@ After profiling, if needed:
 - [x] iOS host (UIKit + JavaScriptCore): views, text measurement, SVG shapes, images, events, storage, keyboard avoidance, back swipe, dark mode
 - [x] Android host (Android Views + QuickJS): same feature set as iOS, with system back
 - [x] Per-app storage in SQLite (row per list item, incremental writes)
+- [x] Secret fields in the Keychain / Android Keystore, secure text fields
 - [ ] Spec generation from a description (Muse Spark, structured outputs)
 - [ ] Edit loop by prompt: changes apply instantly
 - [ ] Automatic repair of invalid specs

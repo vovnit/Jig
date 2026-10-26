@@ -122,6 +122,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
     private fun installNative(toggle: Pair<Double, Double>) {
         val native = qjs.createNewJSObject()
         val database = SqlDatabase(appContext)
+        val secrets = SecretStore(appContext)
 
         native.setProperty("apply", JSCallFunction { args ->
             val json = args[0] as String
@@ -149,6 +150,10 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
         })
         native.setProperty("sqlQuery", JSCallFunction { args -> database.query(args[0] as String, args[1] as String) })
         native.setProperty("sqlExec", JSCallFunction { args -> database.exec(args[0] as String) })
+        native.setProperty("secretGet", JSCallFunction { args -> secrets.get(args[0] as String, args[1] as String) })
+        native.setProperty("secretSet", JSCallFunction { args -> secrets.set(args[0] as String, args[1] as String, args[2] as String) })
+        native.setProperty("secretDelete", JSCallFunction { args -> secrets.delete(args[0] as String, args[1] as String) })
+        native.setProperty("secretClear", JSCallFunction { args -> secrets.clear(args[0] as String) })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })
         native.setProperty("log", JSCallFunction { args ->
             Log.w(TAG, "${args[0]}: ${args[1]}")

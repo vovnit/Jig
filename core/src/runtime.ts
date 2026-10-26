@@ -75,6 +75,8 @@ export class Runtime {
 
   signals = new Map<string, Signal<unknown>>();
   dataKeys = new Set<string>();
+  /** Data keys marked `secret`: kept in the host's secure storage, never in the database. */
+  secretKeys = new Set<string>();
   nav = new Signal<NavEntry[]>([]);
 
   root: ViewNode;
@@ -95,6 +97,8 @@ export class Runtime {
   private frameRequested = false;
   private saveRequested = false;
   private store: DataStore | null = null;
+  /** Last value written to secure storage per secret key (undefined: none stored). */
+  private savedSecrets = new Map<string, unknown>();
   private appOwner: Owner | null = null;
   private textCache = new Map<string, Size>();
   private globalScope: Scope;
@@ -123,6 +127,7 @@ export class Runtime {
    */
   load(spec: AppSpec, { fresh = false } = {}): void {
     this.appOwner?.dispose();
+    if (fresh || this.spec?.id !== spec.id) this.savedSecrets.clear();
     if (fresh) {
       this.signals.clear();
       this.nav = new Signal<NavEntry[]>([]);
@@ -135,6 +140,7 @@ export class Runtime {
     if (this.store?.app !== spec.id) this.store = this.openStore(spec.id);
     const next = new Map<string, Signal<unknown>>();
     this.dataKeys = new Set(Object.keys(spec.data ?? {}));
+    this.secretKeys = new Set(Object.entries(spec.data ?? {}).filter(([, f]) => f.secret).map(([k]) => k));
     // Keys kept from before a hot reload already hold the latest value.
     const stored = [...this.dataKeys].some((k) => !this.signals.has(k)) ? this.readStore() : {};
     for (const [k, f] of Object.entries(spec.data ?? {})) {
@@ -893,6 +899,8 @@ export class Runtime {
     if (!this.spec) return;
     try {
       this.store?.clear();
+      this.host.secrets?.clear(this.spec.id);
+      this.savedSecrets.clear();
     } catch (e) {
       this.error("storage", (e as Error).message);
     }
@@ -910,13 +918,28 @@ export class Runtime {
     }
   }
 
+  /** Stored values, with secret keys read from the host's secure storage. */
   private readStore(): Record<string, unknown> {
+    let out: Record<string, unknown> = {};
     try {
-      return this.store?.read() ?? {};
+      out = this.store?.read() ?? {};
     } catch (e) {
       this.error("storage", (e as Error).message);
-      return {};
     }
+    const secrets = this.host.secrets;
+    if (secrets && this.spec) {
+      for (const k of this.secretKeys) {
+        if (this.signals.has(k)) continue;
+        try {
+          const raw = secrets.get(this.spec.id, k);
+          if (raw != null) out[k] = JSON.parse(raw);
+          this.savedSecrets.set(k, raw == null ? undefined : out[k]);
+        } catch (e) {
+          this.error("secrets", `Cannot read '${k}': ${(e as Error).message}`);
+        }
+      }
+    }
+    return out;
   }
 
   private requestSave(): void {
@@ -926,13 +949,35 @@ export class Runtime {
 
   private save(): void {
     this.saveRequested = false;
-    if (!this.store) return;
-    const values = new Map<string, unknown>();
-    for (const k of this.dataKeys) values.set(k, this.signals.get(k)?.peek());
-    try {
-      this.store.write(values);
-    } catch (e) {
-      this.error("storage", (e as Error).message);
+    if (this.store) {
+      const values = new Map<string, unknown>();
+      for (const k of this.dataKeys) if (!this.secretKeys.has(k)) values.set(k, this.signals.get(k)?.peek());
+      try {
+        // A key that became secret after it was saved in plain text: its value moves
+        // to secure storage below, and the plain copy goes.
+        const plain = [...this.secretKeys].filter((k) => this.store!.has(k));
+        if (plain.length) this.store.remove(plain);
+        this.store.write(values);
+      } catch (e) {
+        this.error("storage", (e as Error).message);
+      }
+    }
+    this.saveSecrets();
+  }
+
+  private saveSecrets(): void {
+    const secrets = this.host.secrets;
+    if (!secrets || !this.spec) return;
+    for (const k of this.secretKeys) {
+      const value = this.signals.get(k)?.peek();
+      if (this.savedSecrets.has(k) && this.savedSecrets.get(k) === value) continue;
+      try {
+        secrets.set(this.spec.id, k, value == null || value === "" ? null : JSON.stringify(value));
+        this.savedSecrets.set(k, value);
+      } catch (e) {
+        // The message names the key only: a secret's value never goes to logs.
+        this.error("secrets", `Cannot save '${k}': ${(e as Error).message}`);
+      }
     }
   }
 }

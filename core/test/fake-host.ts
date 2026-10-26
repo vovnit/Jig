@@ -46,14 +46,24 @@ export function makeDb(sqlite = new DatabaseSync(":memory:")): Database & { sqli
 export interface TestHost extends Host {
   batches: Op[][];
   db: ReturnType<typeof makeDb>;
+  /** Secure storage contents, keyed `app/key`. */
+  vault: Map<string, string>;
   pending: (() => void)[];
   measureCalls: number;
 }
 
-export function makeHost(db = makeDb()): TestHost {
+export function makeHost(db = makeDb(), vault = new Map<string, string>()): TestHost {
   const host: TestHost = {
     batches: [],
     db,
+    vault,
+    secrets: {
+      get: (app, key) => vault.get(`${app}/${key}`) ?? null,
+      set: (app, key, value) => void (value == null ? vault.delete(`${app}/${key}`) : vault.set(`${app}/${key}`, value)),
+      clear: (app) => {
+        for (const k of [...vault.keys()]) if (k.startsWith(`${app}/`)) vault.delete(k);
+      },
+    },
     pending: [],
     measureCalls: 0,
     apply(ops) {
@@ -77,8 +87,8 @@ export function frame(host: TestHost): Op[] {
   return host.batches.slice(before).flat();
 }
 
-export function boot(spec: AppSpec, db?: TestHost["db"]) {
-  const host = makeHost(db);
+export function boot(spec: AppSpec, db?: TestHost["db"], vault?: TestHost["vault"]) {
+  const host = makeHost(db, vault);
   const rt = new Runtime(host);
   rt.setViewport(390, 844);
   rt.load(spec);

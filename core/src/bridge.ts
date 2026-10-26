@@ -44,6 +44,15 @@ export interface Database {
   exec(statements: Statement[]): void;
 }
 
+/** Secure storage for secret `data` fields, namespaced per app. Synchronous, on the runtime's thread. */
+export interface SecretStore {
+  get(app: string, key: string): string | null;
+  /** `null` deletes the secret. */
+  set(app: string, key: string, value: string | null): void;
+  /** Deletes every secret of the app. */
+  clear(app: string): void;
+}
+
 export interface Host {
   /** Apply one batch of ops. Called at most once per frame. */
   apply(ops: Op[]): void;
@@ -55,6 +64,8 @@ export interface Host {
   requestFrame(cb: () => void): void;
   /** Persists app `data` (see store.ts). Without it, data lives for the session only. */
   db?: Database;
+  /** Holds `secret` data fields. Without it, secrets live for the session only. */
+  secrets?: SecretStore;
   now?(): number;
   log?(level: "info" | "warn" | "error", message: string): void;
 }
