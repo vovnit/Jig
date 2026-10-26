@@ -92,7 +92,8 @@ export class DomHost implements Host {
           let ref: Element | null = null;
           let i = 0;
           for (const c of parent.children) {
-            if (c === child) continue;
+            // Indexes count live children only: elements still fading out are skipped.
+            if (c === child || c.classList.contains("jig-leaving")) continue;
             if (i++ === op[3]) {
               ref = c;
               break;
@@ -108,8 +109,18 @@ export class DomHost implements Host {
         }
         case "remove": {
           const child = this.els.get(op[2]);
-          child?.remove();
-          if (child) this.forget(child);
+          if (!child) break;
+          const ms = this.transitions.get(op[2]) ?? 0;
+          this.forget(child);
+          // A node with a value transition fades out in place, above the siblings moving into its spot.
+          if (ms && !snapshot && child.isConnected) {
+            child.classList.add("jig-leaving");
+            child.parentElement?.appendChild(child);
+            child.animate([{ opacity: getComputedStyle(child).opacity }, { opacity: 0 }], { duration: ms, easing: EASING.ease, fill: "forwards" })
+              .finished.then(() => child.remove());
+          } else {
+            child.remove();
+          }
           break;
         }
         case "frame": {
@@ -168,13 +179,12 @@ export class DomHost implements Host {
   }
 
   private forget(el: HTMLElement): void {
-    const id = Number(el.dataset.id);
-    this.els.delete(id);
-    this.types.delete(id);
-    for (const c of el.querySelectorAll<HTMLElement>("[data-id]")) {
-      const cid = Number(c.dataset.id);
-      this.els.delete(cid);
-      this.types.delete(cid);
+    for (const e of [el, ...el.querySelectorAll<HTMLElement>("[data-id]")]) {
+      const id = Number(e.dataset.id);
+      this.els.delete(id);
+      this.types.delete(id);
+      this.transitions.delete(id);
+      this.trims.delete(id);
     }
   }
 

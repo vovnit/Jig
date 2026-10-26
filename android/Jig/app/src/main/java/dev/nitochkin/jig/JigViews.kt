@@ -38,6 +38,13 @@ class JigLayout(context: Context) : ViewGroup(context) {
     var contentWidth = 0
     var contentHeight = 0
 
+    init {
+        // As on iOS and the web: children may draw outside (a row still sliding into place).
+        // Rounded containers and scroll views clip through their own outline instead.
+        clipChildren = false
+        clipToPadding = false
+    }
+
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         for (i in 0 until childCount) {
             val child = getChildAt(i)

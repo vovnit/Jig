@@ -4,6 +4,7 @@ import android.animation.ObjectAnimator
 import android.animation.TimeInterpolator
 import android.animation.ValueAnimator
 import android.content.res.ColorStateList
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Paint
@@ -30,6 +31,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.Switch
+import androidx.core.animation.doOnEnd
 import androidx.core.view.drawToBitmap
 import org.json.JSONArray
 import org.json.JSONObject
@@ -70,6 +72,21 @@ class AndroidRenderer(private val surface: JigLayout) {
     private val nodes = HashMap<Int, Node>()
     /** Nodes created in the batch being applied: they appear without animating their frame. */
     private val createdNow = HashSet<Int>()
+    /** Removed views still fading out: they stay on screen but no longer count as children. */
+    private val leaving = HashSet<View>()
+
+    /** The runtime's navigation depth, reported with every batch. */
+    var navDepth = 1
+        private set
+    /** What each screen below the current one looked like when it was left (taken on push),
+     *  shown under the current screen during a predictive back gesture. */
+    private val screenSnapshots = ArrayList<Bitmap?>()
+    private var screensAnimating = false
+    private var interactiveBack: ImageView? = null
+    private var interactiveDim: ColorDrawable? = null
+    private var interactiveProgress = 0f
+    /** Set once a back gesture committed: the pop it causes is already on screen. */
+    private var awaitingInteractivePop = false
     private val context = surface.context
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -94,27 +111,32 @@ class AndroidRenderer(private val surface: JigLayout) {
             if (op.getString(0) == "command" && op.getString(2) == "transition") screenTransition = op.getJSONArray(3)
         }
         val root = nodes[1]?.view
-        val snapshot = if (screenTransition != null && root != null && root.isLaidOut && root.width > 0) {
-            ImageView(context).apply {
-                setImageBitmap(root.drawToBitmap())
-                layoutParams = FrameParams((root.layoutParams as FrameParams).x, (root.layoutParams as FrameParams).y, root.width, root.height)
-            }
-        } else null
+        val interactivePop = awaitingInteractivePop && screenTransition != null
+        val bitmap = if (screenTransition != null && !interactivePop && root != null && root.isLaidOut && root.width > 0) root.drawToBitmap() else null
+        val snapshot = bitmap?.let { b -> root?.let { snapshotView(b, it) } }
         createdNow.clear()
         for (i in 0 until ops.length()) {
             val op = ops.getJSONArray(i)
             when (op.getString(0)) {
                 "create" -> create(op.getInt(1), op.getString(2), op.getJSONObject(3))
                 "update" -> update(op.getInt(1), op.getJSONObject(2))
-                "insert" -> insert(op.getInt(1), op.getInt(2), op.getInt(3), animated = snapshot == null)
-                "remove" -> remove(op.getInt(2))
+                "insert" -> insert(op.getInt(1), op.getInt(2), op.getInt(3), animated = snapshot == null && !interactivePop)
+                "remove" -> remove(op.getInt(2), animated = snapshot == null && !interactivePop)
                 "frame" -> frame(op.getInt(1), op.getDouble(2), op.getDouble(3), op.getDouble(4), op.getDouble(5))
                 "command" -> if (op.getString(2) == "focus") nodes[op.getInt(1)]?.view?.requestFocus()
             }
         }
-        if (snapshot != null && root != null && screenTransition != null) {
-            animateScreens(screenTransition.getString(0), screenTransition.getString(1), screenTransition.getLong(2), root, snapshot)
+        val kind = screenTransition?.getString(0)
+        if (interactivePop) {
+            finishInteractivePop()
+        } else if (snapshot != null && root != null && screenTransition != null) {
+            animateScreens(kind!!, screenTransition.getString(1), screenTransition.getLong(2), root, snapshot)
         }
+        // Keep one snapshot per screen below the current one, for predictive back.
+        if (navDepth > this.navDepth && kind == "push") screenSnapshots.add(bitmap)
+        while (screenSnapshots.size < navDepth - 1) screenSnapshots.add(null)
+        while (screenSnapshots.size > maxOf(0, navDepth - 1)) screenSnapshots.removeAt(screenSnapshots.size - 1)
+        this.navDepth = navDepth
         onNavDepth?.invoke(navDepth)
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         surface.post { revealFocusedField() }
@@ -161,9 +183,13 @@ class AndroidRenderer(private val surface: JigLayout) {
             is ViewGroup -> parent
             else -> return
         }
-        if (child.parent === container && container.indexOfChild(child) == index) return
+        // Indexes count live children only: views still fading out are skipped.
+        val live = (0 until container.childCount).map(container::getChildAt).filter { it !in leaving }
+        if (child.parent === container && live.indexOf(child) == index) return
+        val siblings = live.filter { it !== child }
         (child.parent as? ViewGroup)?.removeView(child)
-        container.addView(child, index.coerceAtMost(container.childCount), child.layoutParams as? FrameParams ?: FrameParams())
+        val at = if (index < siblings.size) container.indexOfChild(siblings[index]) else container.childCount
+        container.addView(child, at, child.layoutParams as? FrameParams ?: FrameParams())
         // A node with a value transition fades in when it appears in an existing list.
         val t = nodes[childId]?.let(::transition)
         if (animated && t != null && childId in createdNow && parentId !in createdNow) {
@@ -173,10 +199,23 @@ class AndroidRenderer(private val surface: JigLayout) {
         }
     }
 
-    private fun remove(id: Int) {
-        val view = nodes[id]?.view ?: return
-        (view.parent as? ViewGroup)?.removeView(view)
+    private fun remove(id: Int, animated: Boolean) {
+        val node = nodes[id] ?: return
+        val view = node.view
+        val t = transition(node)
         forget(view)
+        // A node with a value transition fades out in place, above the siblings moving into its spot.
+        if (animated && t != null && view.isAttachedToWindow) {
+            leaving.add(view)
+            view.isEnabled = false
+            view.bringToFront()
+            view.animate().alpha(0f).setDuration(t.duration).setInterpolator(t.interpolator).withEndAction {
+                (view.parent as? ViewGroup)?.removeView(view)
+                leaving.remove(view)
+            }
+            return
+        }
+        (view.parent as? ViewGroup)?.removeView(view)
     }
 
     private fun forget(view: View) {
@@ -247,6 +286,76 @@ class AndroidRenderer(private val surface: JigLayout) {
         return Transition(ms, interpolator)
     }
 
+    private fun snapshotView(bitmap: Bitmap, root: View) = ImageView(context).apply {
+        setImageBitmap(bitmap)
+        val p = root.layoutParams as FrameParams
+        layoutParams = FrameParams(p.x, p.y, root.width, root.height)
+    }
+
+    // ---------- Predictive back ----------
+
+    /** Starts a back gesture: the previous screen's snapshot appears under the current one. */
+    fun beginInteractiveBack(): Boolean {
+        val root = nodes[1]?.view ?: return false
+        val bitmap = screenSnapshots.lastOrNull() ?: return false
+        if (navDepth <= 1 || screensAnimating || interactiveBack != null || awaitingInteractivePop) return false
+        val snapshot = snapshotView(bitmap, root)
+        val dim = ColorDrawable(Color.BLACK).apply { alpha = 31 }
+        snapshot.foreground = dim
+        snapshot.translationX = -root.width * 0.3f
+        surface.addView(snapshot, surface.indexOfChild(root))
+        root.background = ColorDrawable(screenBackground)
+        interactiveBack = snapshot
+        interactiveDim = dim
+        interactiveProgress = 0f
+        return true
+    }
+
+    /** Follows the gesture: 0 is where it started, 1 is the screen fully off to the right. */
+    fun updateInteractiveBack(progress: Float) {
+        val snapshot = interactiveBack ?: return
+        val root = nodes[1]?.view ?: return
+        val p = progress.coerceIn(0f, 1f)
+        interactiveProgress = p
+        root.translationX = root.width * p
+        snapshot.translationX = -root.width * 0.3f * (1 - p)
+        interactiveDim?.alpha = (31 * (1 - p)).roundToInt()
+    }
+
+    /** Finishes the gesture. On commit, `pop` runs once the screen is off; the runtime's pop
+     *  then swaps in the real previous screen exactly where its snapshot is. */
+    fun endInteractiveBack(commit: Boolean, pop: () -> Unit) {
+        val snapshot = interactiveBack ?: return
+        ValueAnimator.ofFloat(interactiveProgress, if (commit) 1f else 0f).apply {
+            duration = 220
+            interpolator = PathInterpolator(0.2f, 0.8f, 0.2f, 1f)
+            addUpdateListener { updateInteractiveBack(it.animatedValue as Float) }
+            doOnEnd {
+                if (commit) {
+                    awaitingInteractivePop = true
+                    pop()
+                } else {
+                    surface.removeView(snapshot)
+                    nodes[1]?.view?.let { restoreRoot(it) }
+                    interactiveBack = null
+                }
+            }
+            start()
+        }
+    }
+
+    private fun finishInteractivePop() {
+        nodes[1]?.view?.let { restoreRoot(it) }
+        interactiveBack?.let { surface.removeView(it) }
+        interactiveBack = null
+        awaitingInteractivePop = false
+    }
+
+    private fun restoreRoot(root: View) {
+        root.translationX = 0f
+        nodes[1]?.let { root.background = it.background }
+    }
+
     /**
      * Push: the new screen slides in from the right over the old one, which drifts left and dims.
      * Pop: the reverse. Fade (or animations off): a cross-fade.
@@ -260,7 +369,9 @@ class AndroidRenderer(private val surface: JigLayout) {
         val rootBackground = root.background
         root.background = ColorDrawable(screenBackground)
         val dim = ColorDrawable(Color.BLACK).apply { alpha = 0 }
+        screensAnimating = true
         val done = {
+            screensAnimating = false
             surface.removeView(snapshot)
             root.background = rootBackground
             root.foreground = null
@@ -361,8 +472,9 @@ class AndroidRenderer(private val surface: JigLayout) {
             bg.setStroke((border * density).roundToInt(), color(s["borderColor"]) ?: Color.TRANSPARENT)
             view.background = bg
         }
-        // Scroll views must always clip, or scrolled content draws over the header.
-        view.clipToOutline = radius > 0 || node.type == "image"
+        // Scroll views must always clip, or scrolled content draws over the header. Containers
+        // don't clip their children (see JigLayout), so clipping comes from each view's own outline.
+        view.clipToOutline = radius > 0 || node.type == "image" || node.type == "scroll" || node.type == "hscroll"
         val alpha = (num(s["opacity"]) ?: 1.0).toFloat()
         if (tr != null && view.alpha != alpha) view.animate().alpha(alpha).setDuration(tr.duration).setInterpolator(tr.interpolator)
         else if (tr == null) view.alpha = alpha

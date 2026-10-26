@@ -107,9 +107,9 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     private func installNative(renderer: UIKitRenderer, toggleSize: CGSize) {
         let native = JSValue(newObjectIn: context)!
 
-        let apply: @convention(block) (String, Int) -> Void = { json, _ in
+        let apply: @convention(block) (String, Int) -> Void = { json, navDepth in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { renderer.apply(json: json) }
+                MainActor.assumeIsolated { renderer.apply(json: json, navDepth: navDepth) }
             }
         }
         let measure: @convention(block) (String, Double, Double, Double, Double) -> [Double] = { text, size, weight, lineHeight, maxWidth in

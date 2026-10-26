@@ -72,13 +72,13 @@
           },
           {
             "type": "row",
-            "style": { "gap": 8, "align": "center" },
+            "style": { "gap": 8, "align": "center", "transition": 200 },
             "children": [
               { "type": "textfield", "placeholder": "New chore", "bind": "draft", "onSubmit": { "if": "trim(draft) != ''", "then": [{ "push": "chores", "value": { "id": "uid()", "name": "trim(draft)", "done": "false" } }, { "set": "draft", "to": "''" }] } },
               { "type": "button", "label": "Add", "onTap": { "if": "trim(draft) != ''", "then": [{ "push": "chores", "value": { "id": "uid()", "name": "trim(draft)", "done": "false" } }, { "set": "draft", "to": "''" }] } }
             ]
           },
-          { "type": "button", "variant": "plain", "label": "Start a new day", "style": { "alignSelf": "center" }, "onTap": { "set": "chores", "to": "map(chores, c => {id: c.id, name: c.name, done: false})" } }
+          { "type": "button", "variant": "plain", "label": "Start a new day", "style": { "alignSelf": "center", "transition": 200 }, "onTap": { "set": "chores", "to": "map(chores, c => {id: c.id, name: c.name, done: false})" } }
         ]
       }
     }

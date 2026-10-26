@@ -27,6 +27,18 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     private var nodes: [Int: Node] = [:]
     /// Nodes created in the batch being applied: they appear without animating their frame.
     private var createdNow = Set<Int>()
+    /// Removed views still fading out: they stay on screen but no longer count as children.
+    private var leaving = Set<UIView>()
+
+    /// The runtime's navigation depth, reported with every batch.
+    private(set) var navDepth = 1
+    /// What each screen below the current one looked like when it was left (taken on push),
+    /// shown under the current screen during an interactive back swipe.
+    private var screenSnapshots: [UIView?] = []
+    private var screensAnimating = false
+    private var interactiveBack: (snapshot: UIView, dim: UIView)?
+    /// Set once a back swipe committed: the pop it causes is already on screen.
+    private var awaitingInteractivePop = false
 
     init(surface: UIView) {
         self.surface = surface
@@ -41,14 +53,15 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: - Ops
 
-    func apply(json: String) {
+    func apply(json: String, navDepth: Int = 1) {
         guard let data = json.data(using: .utf8),
               let ops = (try? JSONSerialization.jsonObject(with: data)) as? [[Any]]
         else { return }
         // A screen transition: keep a picture of the old screen to animate away from.
         let screenTransition = ops.first { $0.count >= 4 && ($0[0] as? String) == "command" && ($0[2] as? String) == "transition" }
+        let interactivePop = awaitingInteractivePop && screenTransition != nil
         var snapshot: UIView?
-        if screenTransition != nil, let root = nodes[1]?.view, root.window != nil {
+        if screenTransition != nil, !interactivePop, let root = nodes[1]?.view, root.window != nil {
             snapshot = root.snapshotView(afterScreenUpdates: false)
             snapshot?.frame = root.frame
         }
@@ -64,10 +77,10 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 update(id: id, props: op[2] as? [String: Any] ?? [:])
             case "insert":
                 guard op.count >= 4, let parent = int(op[1]), let child = int(op[2]), let index = int(op[3]) else { continue }
-                insert(parent: parent, child: child, at: index, animated: snapshot == nil)
+                insert(parent: parent, child: child, at: index, animated: snapshot == nil && !interactivePop)
             case "remove":
                 guard op.count >= 3, let child = int(op[2]) else { continue }
-                remove(id: child)
+                remove(id: child, animated: snapshot == nil && !interactivePop)
             case "frame":
                 guard op.count >= 6, let id = int(op[1]), let node = nodes[id] else { continue }
                 let f = CGRect(x: double(op[2]), y: double(op[3]), width: double(op[4]), height: double(op[5]))
@@ -84,10 +97,19 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 continue
             }
         }
-        if let snapshot, let root = nodes[1]?.view, let args = screenTransition?[3] as? [Any], args.count >= 3 {
-            animateScreens(kind: args[0] as? String ?? "push", style: args[1] as? String ?? "slide",
+        let args = screenTransition?[3] as? [Any] ?? []
+        let kind = args.first as? String
+        if interactivePop {
+            finishInteractivePop()
+        } else if let snapshot, let root = nodes[1]?.view, args.count >= 3 {
+            animateScreens(kind: kind ?? "push", style: args[1] as? String ?? "slide",
                            duration: double(args[2]) / 1000, root: root, snapshot: snapshot)
         }
+        // Keep one snapshot per screen below the current one, for interactive back.
+        if navDepth > self.navDepth, kind == "push" { screenSnapshots.append(snapshot) }
+        while screenSnapshots.count < navDepth - 1 { screenSnapshots.append(nil) }
+        while screenSnapshots.count > max(0, navDepth - 1) { screenSnapshots.removeLast() }
+        self.navDepth = navDepth
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         revealFocusedField()
     }
@@ -108,10 +130,10 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         return Transition(duration: ms / 1000, easing: t["easing"] as? String ?? "ease")
     }
 
-    private func animate(_ t: Transition, _ changes: @escaping () -> Void) {
+    private func animate(_ t: Transition, _ changes: @escaping () -> Void, completion: ((Bool) -> Void)? = nil) {
         let base: UIView.AnimationOptions = [.beginFromCurrentState, .allowUserInteraction]
         if t.easing == "spring" {
-            UIView.animate(withDuration: t.duration, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0, options: base, animations: changes)
+            UIView.animate(withDuration: t.duration, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0, options: base, animations: changes, completion: completion)
             return
         }
         let curve: UIView.AnimationOptions = switch t.easing {
@@ -120,7 +142,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         case "easeOut": .curveEaseOut
         default: .curveEaseInOut
         }
-        UIView.animate(withDuration: t.duration, delay: 0, options: base.union(curve), animations: changes)
+        UIView.animate(withDuration: t.duration, delay: 0, options: base.union(curve), animations: changes, completion: completion)
     }
 
     private func timing(_ t: Transition) -> CAMediaTimingFunction {
@@ -143,10 +165,15 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         dim.backgroundColor = .black
         dim.alpha = 0
         dim.isUserInteractionEnabled = false
-        let finish: (Bool) -> Void = { _ in
+        screensAnimating = true
+        let finish: (Bool) -> Void = { [weak self] _ in
             snapshot.removeFromSuperview()
             dim.removeFromSuperview()
+            // A push snapshot is kept for interactive back, so leave it reusable.
+            snapshot.transform = .identity
+            snapshot.alpha = 1
             root.backgroundColor = .clear
+            self?.screensAnimating = false
         }
         let slide = { (changes: @escaping () -> Void) in
             UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
@@ -176,6 +203,69 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 dim.alpha = 0
             }
         }
+    }
+
+    // MARK: - Interactive back
+
+    /// Starts a back swipe: the previous screen's snapshot appears under the current one.
+    /// Returns false when there is nothing to swipe back to, or no picture of it.
+    func beginInteractiveBack() -> Bool {
+        guard navDepth > 1, !screensAnimating, interactiveBack == nil, !awaitingInteractivePop,
+              let root = nodes[1]?.view, let snapshot = screenSnapshots.last ?? nil
+        else { return false }
+        surface.endEditing(true)
+        snapshot.frame = root.frame
+        snapshot.transform = CGAffineTransform(translationX: -root.bounds.width * 0.3, y: 0)
+        let dim = UIView(frame: snapshot.bounds)
+        dim.backgroundColor = .black
+        dim.alpha = 0.12
+        dim.isUserInteractionEnabled = false
+        snapshot.addSubview(dim)
+        surface.insertSubview(snapshot, belowSubview: root)
+        root.backgroundColor = surface.backgroundColor
+        interactiveBack = (snapshot, dim)
+        return true
+    }
+
+    /// Follows the finger: 0 is where the swipe started, 1 is the screen fully off to the right.
+    func updateInteractiveBack(progress: CGFloat) {
+        guard let (snapshot, dim) = interactiveBack, let root = nodes[1]?.view else { return }
+        let p = min(1, max(0, progress))
+        let width = root.bounds.width
+        root.transform = CGAffineTransform(translationX: width * p, y: 0)
+        snapshot.transform = CGAffineTransform(translationX: -width * 0.3 * (1 - p), y: 0)
+        dim.alpha = 0.12 * (1 - p)
+    }
+
+    /// Finishes the swipe. On commit, `pop` runs once the screen is off; the runtime's pop
+    /// then swaps in the real previous screen exactly where its snapshot is.
+    func endInteractiveBack(commit: Bool, pop: @escaping () -> Void) {
+        guard let (snapshot, dim) = interactiveBack, let root = nodes[1]?.view else { return }
+        UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
+            self.updateInteractiveBack(progress: commit ? 1 : 0)
+        } completion: { _ in
+            if commit {
+                self.awaitingInteractivePop = true
+                pop()
+            } else {
+                snapshot.removeFromSuperview()
+                dim.removeFromSuperview()
+                snapshot.transform = .identity
+                root.backgroundColor = .clear
+                self.interactiveBack = nil
+            }
+        }
+    }
+
+    private func finishInteractivePop() {
+        guard let (snapshot, dim) = interactiveBack else { return }
+        nodes[1]?.view.transform = .identity
+        nodes[1]?.view.backgroundColor = .clear
+        snapshot.removeFromSuperview()
+        dim.removeFromSuperview()
+        snapshot.transform = .identity
+        interactiveBack = nil
+        awaitingInteractivePop = false
     }
 
     func revealFocusedField(animated: Bool = true) {
@@ -221,9 +311,12 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     private func insert(parent: Int, child: Int, at index: Int, animated: Bool) {
         guard let p = nodes[parent], let c = nodes[child] else { return }
         let container = (p.view as? JigScrollView)?.content ?? p.view
-        if c.view.superview === container, container.subviews.firstIndex(of: c.view) == index { return }
+        // Indexes count live children only: views still fading out are skipped.
+        let live = container.subviews.filter { !leaving.contains($0) }
+        if c.view.superview === container, live.firstIndex(of: c.view) == index { return }
+        let siblings = live.filter { $0 !== c.view }
         c.view.removeFromSuperview()
-        container.insertSubview(c.view, at: min(index, container.subviews.count))
+        if index < siblings.count { container.insertSubview(c.view, belowSubview: siblings[index]) } else { container.addSubview(c.view) }
         // A node with a value transition fades in when it appears in an existing list.
         if animated, createdNow.contains(child), !createdNow.contains(parent), let t = transition(c) {
             let target = c.view.alpha
@@ -232,10 +325,22 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    private func remove(id: Int) {
+    private func remove(id: Int, animated: Bool) {
         guard let node = nodes[id] else { return }
-        node.view.removeFromSuperview()
-        forget(node.view)
+        let view = node.view
+        forget(view)
+        // A node with a value transition fades out in place, above the siblings moving into its spot.
+        if animated, view.window != nil, let t = transition(node) {
+            leaving.insert(view)
+            view.isUserInteractionEnabled = false
+            view.superview?.bringSubviewToFront(view)
+            animate(t, { view.alpha = 0 }) { [weak self] _ in
+                view.removeFromSuperview()
+                self?.leaving.remove(view)
+            }
+            return
+        }
+        view.removeFromSuperview()
     }
 
     private func forget(_ view: UIView) {

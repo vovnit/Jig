@@ -10,6 +10,7 @@ import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.ImageButton
 import android.widget.PopupMenu
+import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -36,8 +37,27 @@ class MainActivity : ComponentActivity() {
     private var insets = Rect()
     private var lastViewport: List<Double>? = null
 
+    /** System back pops a runtime screen; with predictive back the screen follows the gesture. */
     private val back = object : OnBackPressedCallback(false) {
-        override fun handleOnBackPressed() = runtime.goBack()
+        private var interactive = false
+
+        override fun handleOnBackStarted(backEvent: BackEventCompat) {
+            interactive = renderer.beginInteractiveBack()
+        }
+
+        override fun handleOnBackProgressed(backEvent: BackEventCompat) {
+            if (interactive) renderer.updateInteractiveBack(backEvent.progress)
+        }
+
+        override fun handleOnBackCancelled() {
+            if (interactive) renderer.endInteractiveBack(commit = false) {}
+            interactive = false
+        }
+
+        override fun handleOnBackPressed() {
+            if (interactive) renderer.endInteractiveBack(commit = true) { runtime.goBack() } else runtime.goBack()
+            interactive = false
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

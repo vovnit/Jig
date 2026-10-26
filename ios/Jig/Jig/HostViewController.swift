@@ -89,11 +89,28 @@ final class HostViewController: UIViewController {
         view.addGestureRecognizer(edge)
     }
 
+    private var swipingBack = false
+
+    /// The screen follows the finger; past a third of the width (or on a flick) it pops.
     @objc private func handleBackSwipe(_ gesture: UIScreenEdgePanGestureRecognizer) {
-        guard gesture.state == .ended else { return }
+        let width = max(1, view.bounds.width)
         let dx = gesture.translation(in: view).x
-        let vx = gesture.velocity(in: view).x
-        if dx > view.bounds.width * 0.3 || vx > 500 { runtime.goBack() }
+        switch gesture.state {
+        case .began:
+            swipingBack = renderer.beginInteractiveBack()
+        case .changed:
+            if swipingBack { renderer.updateInteractiveBack(progress: dx / width) }
+        case .ended, .cancelled, .failed:
+            let commit = gesture.state == .ended && (dx > width * 0.3 || gesture.velocity(in: view).x > 500)
+            if swipingBack {
+                renderer.endInteractiveBack(commit: commit) { [weak self] in self?.runtime.goBack() }
+            } else if commit, renderer.navDepth > 1 {
+                runtime.goBack()
+            }
+            swipingBack = false
+        default:
+            break
+        }
     }
 
     // MARK: - App switcher
