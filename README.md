@@ -184,7 +184,8 @@ The container's own UI is a Jig app too: [`specs/shell.json`](specs/shell.json),
   - **Screen**: the screens full size in a paging `hscroll`; swipe between them. **Select** makes a tap pick the part under it instead of using it: the host reports it, and the runtime maps it to its spec path (`/screens/main/body/children/1/row`), outlines it, and tells the model.
   - **Code**: the focused screen's spec in a mono font, with the lines the last change touched tinted (`jsonLines`).
   - A prompt bar: type, or tap the mic and speak. The last steps show above it, with the model's screenshots. **Undo** walks the app's history.
-- **The model loop** ([`core/src/builder`](core/src/builder)): Muse Spark gets the spec format (generated from the runtime's own tables), the app's spec, what the user is looking at and has selected, and the request. It changes the app with `apply_patch` (JSON Patch) or `set_spec`; each result is validated by rendering every screen headlessly, and a rejected one returns its errors, which is the repair loop. It can `screenshot` a screen: the builder shows that screen and the host draws the app at full size. It ends with `finish`. A spoken request is first transcribed by the same model through the Responses API (Chat Completions takes no audio), shown in the log, then handled like a typed one.
+- **The model loop** ([`core/src/builder`](core/src/builder)): Muse Spark gets the spec format (generated from the runtime's own tables), the app's spec, what the user is looking at and has selected, and the request. It changes the app with `apply_patch` (JSON Patch) or `set_spec`. Each result is checked against the spec's JSON Schema, then by rendering every screen headlessly; a rejected one returns its errors, which is the repair loop. It can `screenshot` a screen: the builder shows that screen and the host draws the app at full size. It ends with `finish`. A spoken request is first transcribed by the same model through the Responses API (Chat Completions takes no audio), shown in the log, then handled like a typed one.
+- **The JSON Schema** ([`core/src/schema.ts`](core/src/schema.ts)) is built from tables in [`spec.ts`](core/src/spec.ts): each node type with its props, the style keys, the kinds of value they take. The runtime's set of primitives and the prompt's list of node types come from the same tables, so a prop the schema accepts is one that renders. Unknown props and style keys are rejected with what was likely meant (`unknown style key 'colour'; did you mean 'color'?`), and an app's own components take the props their template reads. The tools send the model the same schema, so it writes specs as JSON in the right shape; the hosted API takes no recursive schemas, so that copy cuts each cycle once (a node's children are "a node, shaped like `$defs.node`"). It compiles in Ajv's strict 2020-12 mode. Only `set_spec` carries it (about 5,400 prompt tokens per model call); `apply_patch` names its definitions for patch values, and every patch is still checked against the full schema.
 - Container services reach the shell through `{"call": "builder.edit", "args": {...}}` actions and `Host.call` (`http`, `audio.start` / `audio.stop`, `screenshot`). Only the shell may call them; an app's spec can't.
 - The API key is a secret field of the shell, entered in Settings. The web playground reaches the API through the Vite dev server's proxy; with `META_API_KEY` in the repo's `.env` (gitignored), the proxy adds the key itself, so the playground builds apps with nothing entered and the key never reaches the browser.
 
@@ -225,7 +226,7 @@ After profiling, if needed:
 
 ### Core
 - [x] Spec format: screens, components, data schema, actions
-- [ ] JSON Schema for spec validation
+- [x] JSON Schema for spec validation, built from the format tables in `spec.ts`; also the model's tool schema
 - [x] JS runtime: state, bindings with targeted updates, keyed list diffing, batched ops
 - [x] Lists: virtualized rows, swipe actions, drag to reorder, inset and plain styles
 - [x] Flex layout in JS: measure interface, dirty flags, measurement cache
@@ -237,7 +238,7 @@ After profiling, if needed:
 - [x] Secret fields in the Keychain / Android Keystore, secure text fields
 - [x] The shell as a Jig app: app list, run, builder (whiteboard, screen pager, select, code view, undo)
 - [x] Embedded apps: child runtimes, scaled and pinned cards, back routing
-- [x] Spec generation and edit loop with Muse Spark: tools, validation by headless render, repair (tested with a scripted model; not yet against the live API)
+- [x] Spec generation and edit loop with Muse Spark: tools, validation by headless render, repair (tested with a scripted model and against the live API)
 - [x] Voice requests and model screenshots on all three hosts (tested live against the hosted API on the web; native needs a key entered in Settings)
 
 ### Container services

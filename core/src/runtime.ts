@@ -10,7 +10,7 @@ import { type Compiled, type Scope, childScope, compile, compilePath, compileTem
 import { type Box, type Frame, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "./signals.ts";
 import { DataStore } from "./store.ts";
-import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ListSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
+import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ListSpec, NODE_TYPES, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
 const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "onPage", "onSelect", "props", "$path"]);
 const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
@@ -1568,7 +1568,7 @@ export class Runtime {
   }
 }
 
-const PRIMITIVES = new Set(["root", "screen", "column", "row", "overlay", "scroll", "hscroll", "list", "app", "text", "button", "textfield", "toggle", "shape", "image", "spacer", "divider"]);
+const PRIMITIVES = new Set(["root", "screen", ...Object.keys(NODE_TYPES)]);
 const isPrimitive = (t: string) => PRIMITIVES.has(t);
 export const PRIMITIVE_TYPES = [...PRIMITIVES].filter((t) => t !== "root" && t !== "screen");
 

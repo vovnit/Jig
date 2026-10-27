@@ -1,61 +1,39 @@
-// Checks a spec before it replaces a working one: its structure, then a headless render
-// of every screen with a stub host, collecting the runtime's errors. A spec that passes
-// renders on every platform; the errors go back to the model to repair.
+// Checks a spec before it replaces a working one: its shape against the JSON Schema
+// (schema.ts), what a schema can't say (screens that exist, expressions that compile),
+// then a headless render of every screen with a stub host, collecting the runtime's
+// errors. A spec that passes renders on every platform; the errors go back to the model.
 import type { Host, Op } from "../bridge.ts";
-import { BUILTIN_COMPONENTS, TYPE_ALIASES } from "../builtins.ts";
 import { compileTemplate } from "../expr.ts";
-import { PRIMITIVE_TYPES, Runtime } from "../runtime.ts";
+import { Runtime } from "../runtime.ts";
+import { schemaErrors, specSchema } from "../schema.ts";
 import type { Action, AppSpec, NodeSpec } from "../spec.ts";
-
-const ACTIONS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call"];
-const FIELD_TYPES = new Set(["string", "number", "boolean", "date", "datetime", "list", "object"]);
 
 /** Problems with the spec, each with where it is; empty when it renders cleanly. */
 export function validateSpec(spec: unknown): string[] {
-  const errors: string[] = [];
   if (!spec || typeof spec !== "object" || Array.isArray(spec)) return ["The spec must be a JSON object"];
   const s = spec as AppSpec;
-  if (typeof s.id !== "string" || !s.id) errors.push("id: a non-empty string is required");
-  if (typeof s.name !== "string" || !s.name) errors.push("name: a non-empty string is required");
-  if (!s.screens || typeof s.screens !== "object" || !Object.keys(s.screens).length) {
-    errors.push("screens: at least one screen is required");
-    return errors;
-  }
-  if (s.start !== undefined && !s.screens[s.start]) errors.push(`start: no screen named '${s.start}'`);
-  for (const [k, f] of Object.entries(s.data ?? {})) {
-    if (!f || typeof f !== "object" || !FIELD_TYPES.has((f as { type: string }).type)) {
-      errors.push(`data.${k}: needs a type, one of ${[...FIELD_TYPES].join(", ")}`);
-    }
-  }
+  const components = s.components && typeof s.components === "object" ? s.components : {};
+  const errors = schemaErrors(spec, specSchema(components));
 
-  const known = new Set([...PRIMITIVE_TYPES, ...Object.keys(TYPE_ALIASES), ...Object.keys(BUILTIN_COMPONENTS), ...Object.keys(s.components ?? {})]);
-  const screens = new Set(Object.keys(s.screens));
+  if (typeof s.start === "string" && s.screens && !s.screens[s.start]) errors.push(`start: no screen named '${s.start}'`);
+  const screens = new Set(Object.keys(s.screens ?? {}));
   const checkActions = (actions: unknown, where: string): void => {
     for (const [i, a] of (Array.isArray(actions) ? actions : [actions]).entries()) {
       const w = Array.isArray(actions) ? `${where}[${i}]` : where;
-      if (!a || typeof a !== "object") {
-        errors.push(`${w}: an action must be an object`);
-        continue;
-      }
-      const kind = ACTIONS.find((k) => k in a);
-      if (!kind) errors.push(`${w}: unknown action ${JSON.stringify(a)}; use one of ${ACTIONS.join(", ")}`);
-      else if (kind === "navigate" && !screens.has((a as { navigate: string }).navigate)) errors.push(`${w}: no screen named '${(a as { navigate: string }).navigate}'`);
-      else if (kind === "call") errors.push(`${w}: apps can't call container services`);
-      else if (kind === "if") {
+      if (!a || typeof a !== "object") continue;
+      if ("navigate" in a && !screens.has(a.navigate)) errors.push(`${w}: no screen named '${a.navigate}'`);
+      else if ("call" in a) errors.push(`${w}: apps can't call container services`);
+      else if ("if" in a) {
         const c = a as Extract<Action, { if: string }>;
         if (c.then) checkActions(c.then, `${w}.then`);
         if (c.else) checkActions(c.else, `${w}.else`);
       }
     }
   };
-  const checkNode = (node: unknown, where: string): void => {
-    if (!node || typeof node !== "object" || Array.isArray(node)) {
-      errors.push(`${where}: a node must be an object with a 'type'`);
-      return;
-    }
-    const n = node as NodeSpec;
-    if (typeof n.type !== "string") errors.push(`${where}: missing 'type'`);
-    else if (!known.has(n.type)) errors.push(`${where}: unknown type '${n.type}'`);
+  // The schema checks the shapes; this walks every node for what it can't, skipping
+  // whatever isn't shaped like a node (the schema has reported it).
+  const checkNode = (n: NodeSpec, where: string): void => {
+    if (!n || typeof n !== "object" || Array.isArray(n)) return;
     for (const [k, v] of Object.entries(n)) {
       if (k.startsWith("on") && v) checkActions(v, `${where}.${k}`);
       else if (typeof v === "string" && v.includes("{{")) {
@@ -67,24 +45,17 @@ export function validateSpec(spec: unknown): string[] {
       }
     }
     if (Array.isArray(n.children)) n.children.forEach((c, i) => checkNode(c, `${where}.children[${i}]`));
-    if (n.child) checkNode(n.child, `${where}.child`);
     if (n.type === "list") {
-      if (typeof n.items !== "string") errors.push(`${where}.items: an expression for the items is required`);
-      if (n.row) checkNode(n.row, `${where}.row`);
-      else errors.push(`${where}.row: a node for each row is required`);
-      if (n.empty && typeof n.empty === "object") checkNode(n.empty, `${where}.empty`);
-      for (const [i, a] of ((n.swipe as { do?: unknown }[] | undefined) ?? []).entries()) checkActions(a?.do, `${where}.swipe[${i}].do`);
+      checkNode(n.row as NodeSpec, `${where}.row`);
+      if (n.empty && typeof n.empty === "object") checkNode(n.empty as NodeSpec, `${where}.empty`);
+      if (Array.isArray(n.swipe)) for (const [i, a] of (n.swipe as { do?: Action }[]).entries()) checkActions(a?.do, `${where}.swipe[${i}].do`);
     }
   };
-  for (const [name, screen] of Object.entries(s.screens)) {
-    if (!screen || typeof screen !== "object" || !screen.body) {
-      errors.push(`screens.${name}: a body node is required`);
-      continue;
-    }
-    checkNode(screen.body, `screens.${name}.body`);
-    if (screen.footer) checkNode(screen.footer, `screens.${name}.footer`);
+  for (const [name, screen] of Object.entries(s.screens ?? {})) {
+    checkNode(screen?.body, `screens.${name}.body`);
+    checkNode(screen?.footer as NodeSpec, `screens.${name}.footer`);
   }
-  for (const [name, c] of Object.entries(s.components ?? {})) checkNode(c, `components.${name}`);
+  for (const [name, c] of Object.entries(components)) checkNode(c, `components.${name}`);
   if (errors.length) return errors;
 
   // Render every screen, as a whiteboard card would.

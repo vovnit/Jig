@@ -174,3 +174,120 @@ export const TYPOGRAPHY: Record<string, TextStyle & { color?: string }> = {
  * per platform; line breaks may differ slightly between platforms.
  */
 export const FONT_FAMILY = "system-ui";
+
+// ---------- The format as data ----------
+// What each node type takes and which style keys exist. The JSON Schema (`schema.ts`), the
+// validator and the model's prompt are built from these tables, and the runtime's set of
+// primitives is their keys, so none of them can drift from what renders.
+
+/**
+ * The kind of value a prop or style key takes. Every kind except `expr` and `path` also
+ * takes a `{{binding}}` string. An array is a set of allowed words.
+ */
+export type ValueKind =
+  | "text" // shown as text: a string, number or boolean
+  | "string"
+  | "number"
+  | "boolean"
+  | "color" // a theme token or #hex
+  | "dim" // a number, "50%" or "fill"
+  | "edges" // a number or [y, x] / [top, right, bottom, left]
+  | "expr" // a bare expression, without {{ }}
+  | "path" // a state or data path, such as "draft" or "chore.done"
+  | "actions"
+  | "node"
+  | "nodeOrText"
+  | "swipe"
+  | "style"
+  | "transition"
+  | "fontWeight"
+  | "align"
+  | "justify"
+  | "any"
+  | readonly string[];
+
+export interface NodeTypeInfo {
+  /** One line for the model. */
+  doc: string;
+  props: Record<string, ValueKind>;
+  /** Takes `children`. */
+  children?: boolean;
+}
+
+const CONTAINER = { children: true, props: {} };
+
+/** Primitive node types, besides the screen roots the runtime makes itself. */
+export const NODE_TYPES: Record<string, NodeTypeInfo> = {
+  column: { ...CONTAINER, doc: "children top to bottom" },
+  row: { ...CONTAINER, doc: "children left to right" },
+  overlay: { ...CONTAINER, doc: "children stacked on top of each other" },
+  scroll: { ...CONTAINER, doc: "a vertical scroll view" },
+  hscroll: { children: true, doc: "a horizontal scroll view; paging snaps to whole pages", props: { paging: "boolean", page: "number", onPage: "actions" } },
+  canvas: { ...CONTAINER, doc: "a surface to pan in both directions and pinch to zoom" },
+  spacer: { doc: "empty space that grows", props: {} },
+  divider: { doc: "a hairline", props: {} },
+  text: { doc: "text", props: { value: "text", variant: Object.keys(TYPOGRAPHY) } },
+  button: { doc: "a button", props: { label: "text", variant: ["primary", "secondary", "plain", "danger"] } },
+  textfield: {
+    doc: "a text input; bind keeps its text",
+    props: { placeholder: "text", bind: "path", value: "text", keyboard: ["default", "number"], secure: "boolean", onChange: "actions", onSubmit: "actions" },
+  },
+  toggle: { doc: "a switch; onChange gets the new value as `value`", props: { value: "boolean", bind: "path", onChange: "actions" } },
+  shape: {
+    doc: "an SVG path or a named shape (@star); trimStart/trimEnd 0..1 draw part of a stroke",
+    props: { path: "string", fill: "color", stroke: "color", strokeWidth: "number", lineCap: ["butt", "round", "square"], viewBox: "string", trimStart: "number", trimEnd: "number" },
+  },
+  image: { doc: "an image from an https or data URL", props: { src: "string" } },
+  list: {
+    doc: "native rows, the way to show items",
+    props: {
+      items: "expr",
+      row: "node",
+      variant: ["inset", "plain"],
+      header: "text",
+      footer: "text",
+      empty: "nodeOrText",
+      swipe: "swipe",
+      reorder: "boolean",
+      separators: "boolean",
+      rowStyle: "style",
+    },
+  },
+  app: {
+    doc: "another app embedded (the shell's)",
+    props: { spec: "any", screen: "string", scale: "number", interactive: "boolean", selecting: "boolean", onSelect: "actions" },
+  },
+};
+
+/** Keys every node takes. */
+export const COMMON_PROPS: Record<string, ValueKind> = {
+  type: "string",
+  style: "style",
+  if: "expr",
+  each: "expr",
+  as: "string",
+  indexAs: "string",
+  key: "expr",
+  onTap: "actions",
+};
+
+export const STYLE_KEYS: Record<string, ValueKind> = {
+  width: "dim", height: "dim",
+  minWidth: "number", maxWidth: "number", minHeight: "number", maxHeight: "number",
+  padding: "edges", paddingX: "number", paddingY: "number", paddingTop: "number", paddingRight: "number", paddingBottom: "number", paddingLeft: "number",
+  margin: "edges", marginX: "number", marginY: "number", marginTop: "number", marginRight: "number", marginBottom: "number", marginLeft: "number",
+  gap: "number",
+  align: "align", alignItems: "align", justify: "justify", justifyContent: "justify", alignSelf: "align",
+  grow: "number", flexGrow: "number", flex: "number", shrink: "number", flexShrink: "number",
+  position: ["absolute", "relative"], top: "number", left: "number", right: "number", bottom: "number",
+  aspectRatio: "number",
+  background: "color", color: "color",
+  radius: "number", borderWidth: "number", borderColor: "color",
+  opacity: "number", clip: "boolean", shadow: "boolean",
+  textAlign: ["left", "center", "right", "start", "end"],
+  fontSize: "number", fontWeight: "fontWeight", fontFamily: ["mono"], lineHeight: "number",
+  transition: "transition",
+};
+
+export const ACTION_KINDS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call"] as const;
+export const FIELD_TYPES: FieldSpec["type"][] = ["string", "number", "boolean", "date", "datetime", "list", "object"];

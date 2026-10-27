@@ -2,6 +2,7 @@
 // app's spec in small validated steps. Each change is checked by rendering every screen;
 // a rejected one returns its errors, which is the repair loop. The model can look at the
 // result (screenshots) before it finishes.
+import { acyclic, type Schema, specSchema } from "../schema.ts";
 import type { AppSpec } from "../spec.ts";
 import { applyPatch, type PatchOp } from "./patch.ts";
 import { systemPrompt } from "./prompt.ts";
@@ -59,10 +60,17 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+/**
+ * The spec's JSON Schema definitions, sent once with set_spec (each copy costs ~5k prompt
+ * tokens); the API takes no recursive schemas. apply_patch's values point at them.
+ */
+const { $defs } = acyclic(specSchema());
+const def = (name: string): Schema => ({ $ref: `#/$defs/${name}` });
+
 function tools(withScreenshots: boolean) {
-  const fn = (name: string, description: string, properties: Record<string, unknown>, required: string[]) => ({
+  const fn = (name: string, description: string, properties: Record<string, unknown>, required: string[], defs?: Record<string, Schema>) => ({
     type: "function",
-    function: { name, description, parameters: { type: "object", properties, required } },
+    function: { name, description, parameters: { type: "object", properties, required, ...(defs ? { $defs: defs } : {}) } },
   });
   return [
     fn("apply_patch", "Change the app with JSON Patch ops on the whole spec. Rejected with errors if the result doesn't render.", {
@@ -70,12 +78,20 @@ function tools(withScreenshots: boolean) {
         type: "array",
         items: {
           type: "object",
-          properties: { op: { type: "string", enum: ["add", "remove", "replace", "move", "copy"] }, path: { type: "string" }, value: {}, from: { type: "string" } },
+          properties: {
+            op: { type: "string", enum: ["add", "remove", "replace", "move", "copy"] },
+            path: { type: "string", description: "JSON Pointer into the spec, such as /screens/main/body/children/0" },
+            value: {
+              description: "The JSON value for add and replace. A node, style, action, data field or screen takes the shape set_spec's schema defines for it ($defs.node, $defs.style, $defs.actions, $defs.field, $defs.screen); otherwise a plain value, such as a title",
+            },
+            from: { type: "string" },
+          },
           required: ["op", "path"],
+          additionalProperties: false,
         },
       },
     }, ["patch"]),
-    fn("set_spec", "Replace the whole spec: for a new app or a rewrite.", { spec: { type: "object" } }, ["spec"]),
+    fn("set_spec", "Replace the whole spec: for a new app or a rewrite.", { spec: def("app") }, ["spec"], $defs),
     ...(withScreenshots ? [fn("screenshot", "See a screen of the app as it renders now.", { screen: { type: "string", description: "Screen name; default: the one the user is looking at" } }, [])] : []),
     fn("finish", "End the turn with a short message to the user.", {
       message: { type: "string" },

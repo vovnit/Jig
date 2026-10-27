@@ -85,6 +85,11 @@ test("an edit applies a patch, repairs a rejected one, and finishes", async () =
   assert.match(JSON.stringify(requests[0].messages[1]), /looking at screen \\"main\\"/);
   assert.match(JSON.stringify(requests[1].messages.at(-1)), /Not applied, the spec has errors/);
   assert.deepEqual(requests[0].tools.map((t) => t.function.name), ["apply_patch", "set_spec", "screenshot", "finish"]);
+  // The tools that write specs carry the spec's JSON Schema.
+  const params = (name: string) => (requests[0].tools.find((t) => t.function.name === name)!.function as unknown as { parameters: { properties: Record<string, { $ref?: string }>; $defs?: Record<string, unknown> } }).parameters;
+  assert.equal(params("set_spec").properties.spec.$ref, "#/$defs/app");
+  assert.ok(params("set_spec").$defs?.node, "set_spec carries the schema");
+  assert.equal(params("apply_patch").$defs, undefined, "apply_patch points at it instead of sending it twice");
   const log = (rt.get("log") as { role: string; text: string }[]).map((e) => `${e.role}: ${e.text}`);
   assert.deepEqual(log.filter((l) => !l.startsWith("step")), ["user: rename the screen", "model: Renamed the screen."]);
   assert.ok(log.some((l) => l.startsWith("step: Fixing")));

@@ -147,14 +147,14 @@ function edges(s: Record<string, unknown>, base: string): Edges {
   return e;
 }
 
-const ALIGN_ALIASES: Record<string, Align> = {
+export const ALIGN_ALIASES: Record<string, Align> = {
   start: "start", "flex-start": "start", leading: "start", top: "start", left: "start",
   center: "center", middle: "center",
   end: "end", "flex-end": "end", trailing: "end", bottom: "end", right: "end",
   stretch: "stretch", fill: "stretch",
 };
 
-const JUSTIFY_ALIASES: Record<string, Justify> = {
+export const JUSTIFY_ALIASES: Record<string, Justify> = {
   ...(ALIGN_ALIASES as Record<string, Justify>),
   stretch: "start",
   between: "between", "space-between": "between", spaceBetween: "between",
