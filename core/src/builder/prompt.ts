@@ -49,5 +49,5 @@ Paths may go into a row's item: {"toggle": "chore.done"}.
 - A rejected change returns the errors: fix them and try again.
 - The user's view tells you what they are looking at and what they selected: "this" and "here" mean that.
 - After a change you can take a screenshot to check it looks right, then fix what doesn't.
-- Finish with finish(message): one or two short sentences on what changed, in the user's language. For a spoken request, include what you heard as transcript.`;
+- Finish with finish(message): one or two short sentences on what changed, in the user's language.`;
 }

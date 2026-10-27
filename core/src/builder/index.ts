@@ -14,7 +14,7 @@ export function installBuilder(shell: Runtime): void {
   const deps = (id: string): AgentDeps => ({
     settings: {
       apiKey: String(shell.get("apiKey") ?? ""),
-      model: String(shell.get("model") || "muse-spark-1.1"),
+      model: String(shell.get("model") || "muse-spark-1.3"),
       baseUrl: String(shell.get("baseUrl") || "https://api.meta.ai/v1"),
     },
     http: (req) => shell.hostCall("http", req as unknown as Record<string, unknown>),
@@ -105,7 +105,6 @@ export function installBuilder(shell: Runtime): void {
       .hostCall<{ data?: string }>("audio.stop")
       .then((r) => {
         if (!r?.data) throw new Error("Nothing was recorded");
-        log({ role: "user", text: "🎙 Spoken request" });
         return run(id, { audio: r.data });
       })
       .catch((e: Error) => log({ role: "error", text: `Can't record: ${e.message}` }));

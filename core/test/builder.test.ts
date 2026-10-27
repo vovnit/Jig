@@ -16,17 +16,21 @@ function setup(replies: unknown[]) {
     id: "shell",
     name: "Shell",
     data: { apps: { type: "list", default: [] }, apiKey: { type: "string", default: "test-key" } },
-    state: { log: [], busy: false, prompt: "", selected: null, mode: "board", focus: "" },
+    state: { log: [], busy: false, prompt: "", selected: null, mode: "board", focus: "", recording: false },
     screens: { home: { body: { type: "text", value: "Home" } } },
   };
   const { host, rt } = boot(shell, undefined, undefined, { trusted: true });
-  const requests: { messages: { role: string; content: unknown }[]; tools: { function: { name: string } }[] }[] = [];
+  const requests: { url: string; messages: { role: string; content: unknown }[]; tools: { function: { name: string } }[]; input?: unknown }[] = [];
   host.call = (service, args, done) => {
     if (service === "screenshot") return queueMicrotask(() => done({ data: "PNG" }));
+    if (service === "audio.start") return queueMicrotask(() => done({}));
+    if (service === "audio.stop") return queueMicrotask(() => done({ data: "WAV" }));
     assert.equal(service, "http");
-    requests.push(JSON.parse(String(args.body)));
-    const reply = replies.shift();
-    queueMicrotask(() => done({ status: 200, body: JSON.stringify({ choices: [{ message: reply }] }) }));
+    requests.push({ url: String(args.url), ...JSON.parse(String(args.body)) });
+    const reply = replies.shift() as { output?: unknown };
+    // A Responses reply (transcription) goes back as is; the rest are chat messages.
+    const body = reply?.output ? reply : { choices: [{ message: reply }] };
+    queueMicrotask(() => done({ status: 200, body: JSON.stringify(body) }));
   };
   installBuilder(rt);
   seedApps(rt, [load("chores")]);
@@ -68,7 +72,8 @@ test("validation catches unknown types, bad actions and expressions that don't r
 test("an edit applies a patch, repairs a rejected one, and finishes", async () => {
   const { rt, requests, idle, edit } = setup([
     toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "{{len(chores) +}}" }] }),
-    toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "Today's chores" }] }),
+    // An object argument sent as JSON text is taken too.
+    toolCall("apply_patch", { patch: JSON.stringify([{ op: "replace", path: "/screens/main/title", value: "Today's chores" }]) }),
     toolCall("finish", { message: "Renamed the screen." }),
   ]);
   edit("rename the screen");
@@ -90,6 +95,28 @@ test("an edit applies a patch, repairs a rejected one, and finishes", async () =
   assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Chores");
   rt.run({ call: "builder.redo", args: { id: "'chores'" } }, { lookup: () => undefined, has: () => false });
   assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Today's chores");
+});
+
+test("a spoken request is transcribed, shown, then edited like a typed one", async () => {
+  const { rt, requests, idle } = setup([
+    { output: [{ type: "reasoning" }, { type: "message", content: [{ type: "output_text", text: "Rename the screen to Today's chores" }] }] },
+    toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "Today's chores" }] }),
+    toolCall("finish", { message: "Renamed the screen." }),
+  ]);
+  const scope = { lookup: () => undefined, has: () => false };
+  rt.run({ call: "builder.voiceStart" }, scope);
+  await idle();
+  assert.equal(rt.get("recording"), true);
+  rt.run({ call: "builder.voiceStop", args: { id: "'chores'" } }, scope);
+  await new Promise((r) => setTimeout(r, 1));
+  await idle();
+  assert.match(requests[0].url, /\/responses$/);
+  assert.match(JSON.stringify(requests[0].input), /data:audio\/wav;base64,WAV/);
+  assert.match(requests[1].url, /\/chat\/completions$/);
+  assert.match(JSON.stringify(requests[1].messages[1]), /Request: Rename the screen to Today's chores/);
+  assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Today's chores");
+  const log = (rt.get("log") as { role: string; text: string }[]).filter((e) => e.role !== "step").map((e) => `${e.role}: ${e.text}`);
+  assert.deepEqual(log, ["user: “Rename the screen to Today's chores”", "model: Renamed the screen."]);
 });
 
 test("without an API key the builder says what to do", async () => {

@@ -183,10 +183,10 @@ The container's own UI is a Jig app too: [`specs/shell.json`](specs/shell.json),
   - **Board**: a pannable, zoomable `canvas` of live cards, one per screen, laid out by navigation depth with arrows for every `navigate` (`flow(spec)`). Each card is the app pinned to that screen and scaled down.
   - **Screen**: the screens full size in a paging `hscroll`; swipe between them. **Select** makes a tap pick the part under it instead of using it: the host reports it, and the runtime maps it to its spec path (`/screens/main/body/children/1/row`), outlines it, and tells the model.
   - **Code**: the focused screen's spec in a mono font, with the lines the last change touched tinted (`jsonLines`).
-  - A prompt bar: type, or tap the mic and speak (the audio goes to the model). The last steps show above it, with the model's screenshots. **Undo** walks the app's history.
-- **The model loop** ([`core/src/builder`](core/src/builder)): Muse Spark gets the spec format (generated from the runtime's own tables), the app's spec, what the user is looking at and has selected, and the request. It changes the app with `apply_patch` (JSON Patch) or `set_spec`; each result is validated by rendering every screen headlessly, and a rejected one returns its errors, which is the repair loop. It can `screenshot` a screen: the builder shows that screen and the host draws the app at full size. It ends with `finish`.
+  - A prompt bar: type, or tap the mic and speak. The last steps show above it, with the model's screenshots. **Undo** walks the app's history.
+- **The model loop** ([`core/src/builder`](core/src/builder)): Muse Spark gets the spec format (generated from the runtime's own tables), the app's spec, what the user is looking at and has selected, and the request. It changes the app with `apply_patch` (JSON Patch) or `set_spec`; each result is validated by rendering every screen headlessly, and a rejected one returns its errors, which is the repair loop. It can `screenshot` a screen: the builder shows that screen and the host draws the app at full size. It ends with `finish`. A spoken request is first transcribed by the same model through the Responses API (Chat Completions takes no audio), shown in the log, then handled like a typed one.
 - Container services reach the shell through `{"call": "builder.edit", "args": {...}}` actions and `Host.call` (`http`, `audio.start` / `audio.stop`, `screenshot`). Only the shell may call them; an app's spec can't.
-- The API key is a secret field of the shell, entered in Settings. The web playground reaches the API through the Vite dev server's proxy.
+- The API key is a secret field of the shell, entered in Settings. The web playground reaches the API through the Vite dev server's proxy; with `META_API_KEY` in the repo's `.env` (gitignored), the proxy adds the key itself, so the playground builds apps with nothing entered and the key never reaches the browser.
 
 ### JS engine
 
@@ -238,7 +238,7 @@ After profiling, if needed:
 - [x] The shell as a Jig app: app list, run, builder (whiteboard, screen pager, select, code view, undo)
 - [x] Embedded apps: child runtimes, scaled and pinned cards, back routing
 - [x] Spec generation and edit loop with Muse Spark: tools, validation by headless render, repair (tested with a scripted model; not yet against the live API)
-- [x] Voice requests and model screenshots on all three hosts (audio format for the hosted API still to confirm)
+- [x] Voice requests and model screenshots on all three hosts (tested live against the hosted API on the web; native needs a key entered in Settings)
 
 ### Container services
 - [ ] Scheduler and background jobs

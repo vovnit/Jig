@@ -14,7 +14,7 @@
     },
     "model": {
       "type": "string",
-      "default": "muse-spark-1.1"
+      "default": "muse-spark-1.3"
     },
     "baseUrl": {
       "type": "string",
@@ -339,7 +339,7 @@
           },
           {
             "type": "textfield",
-            "placeholder": "muse-spark-1.1",
+            "placeholder": "muse-spark-1.3",
             "bind": "model"
           }
         ]

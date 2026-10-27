@@ -45,6 +45,9 @@ function applyThemeVars(): void {
 installBuilder(runtime);
 runtime.load(shell as unknown as AppSpec, { fresh: true });
 seedApps(runtime, SEEDS);
+// The dev server holds a key from .env (vite.config.ts) and adds it to model requests.
+declare const __DEV_MODEL_KEY__: boolean;
+if (import.meta.env.DEV && __DEV_MODEL_KEY__ && !runtime.get("apiKey")) runtime.set("apiKey", "from-dev-server");
 applyThemeVars();
 
 /** The app the panels show: the one running in the shell, or the shell itself. */

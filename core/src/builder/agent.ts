@@ -79,7 +79,6 @@ function tools(withScreenshots: boolean) {
     ...(withScreenshots ? [fn("screenshot", "See a screen of the app as it renders now.", { screen: { type: "string", description: "Screen name; default: the one the user is looking at" } }, [])] : []),
     fn("finish", "End the turn with a short message to the user.", {
       message: { type: "string" },
-      transcript: { type: "string", description: "For a spoken request: what you heard" },
     }, ["message"]),
   ];
 }
@@ -99,9 +98,24 @@ export async function runEdit(deps: AgentDeps, request: EditRequest): Promise<vo
     deps.log({ role: "error", text: "Add a Meta Model API key in Settings to change apps." });
     return;
   }
+  let text = request.text;
+  if (request.audio) {
+    // Chat Completions takes no audio; the Responses API reads it as a file. Transcribe it
+    // first, so the user sees what was heard, then edit as for a typed request.
+    try {
+      text = await transcribe(deps, request.audio);
+    } catch (e) {
+      deps.log({ role: "error", text: (e as Error).message });
+      return;
+    }
+    if (!text) {
+      deps.log({ role: "error", text: "Nothing was heard. Try again a little closer to the mic." });
+      return;
+    }
+    deps.log({ role: "user", text: `“${text}”` });
+  }
   const context = `Current spec:\n\`\`\`json\n${JSON.stringify(deps.getSpec())}\n\`\`\`\n${viewText(deps.view())}`;
-  const content: unknown[] = [{ type: "text", text: `${context}\n\nRequest: ${request.text ?? "(spoken, in the audio)"}` }];
-  if (request.audio) content.push({ type: "input_audio", input_audio: { data: request.audio, format: "wav" } });
+  const content: unknown[] = [{ type: "text", text: `${context}\n\nRequest: ${text ?? ""}` }];
   const messages: Message[] = [
     { role: "system", content: systemPrompt() },
     { role: "user", content },
@@ -146,13 +160,23 @@ export async function runEdit(deps: AgentDeps, request: EditRequest): Promise<vo
 
 const FINISHED = Symbol("finished");
 
+/** Models often send an object argument as JSON text instead; take either. */
+function decoded(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
 async function runTool(deps: AgentDeps, name: string, args: Record<string, unknown>, images: string[]): Promise<string | typeof FINISHED> {
   switch (name) {
     case "apply_patch":
     case "set_spec": {
       let next: AppSpec;
       try {
-        next = name === "set_spec" ? (args.spec as AppSpec) : applyPatch(deps.getSpec(), (args.patch as PatchOp[]) ?? []);
+        next = name === "set_spec" ? (decoded(args.spec) as AppSpec) : applyPatch(deps.getSpec(), (decoded(args.patch) as PatchOp[]) ?? []);
       } catch (e) {
         deps.log({ role: "step", text: `Fixing a change that didn't apply` });
         return `Not applied: ${(e as Error).message}`;
@@ -175,13 +199,42 @@ async function runTool(deps: AgentDeps, name: string, args: Record<string, unkno
       return "The screenshot follows as an image.";
     }
     case "finish": {
-      if (typeof args.transcript === "string" && args.transcript) deps.log({ role: "user", text: `“${args.transcript}”` });
       deps.log({ role: "model", text: String(args.message ?? "Done.") });
       return FINISHED;
     }
     default:
       return `Unknown tool '${name}'.`;
   }
+}
+
+/** What was said in a WAV, word for word (empty when nothing was). */
+async function transcribe(deps: AgentDeps, wav: string): Promise<string> {
+  const { settings } = deps;
+  const res = await deps.http({
+    url: `${settings.baseUrl.replace(/\/$/, "")}/responses`,
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
+    body: JSON.stringify({
+      model: settings.model,
+      reasoning: { effort: "minimal" },
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: "This recording is someone asking for a change to an app they are building: its screens, text, layout, colors or data. Write down exactly what they say, in their language, and nothing else. If nothing is said, answer with nothing." },
+          { type: "input_file", filename: "request.wav", file_data: `data:audio/wav;base64,${wav}` },
+        ],
+      }],
+    }),
+  });
+  let json: { output?: { type: string; content?: { text?: string }[] }[]; error?: { message?: string } };
+  try {
+    json = JSON.parse(res.body);
+  } catch {
+    throw new Error(`The model service answered ${res.status}: ${res.body.slice(0, 200)}`);
+  }
+  if (res.status >= 400) throw new Error(`The model service answered ${res.status}: ${json.error?.message ?? res.body.slice(0, 200)}`);
+  const message = json.output?.find((o) => o.type === "message");
+  return (message?.content ?? []).map((c) => c.text ?? "").join("").trim();
 }
 
 async function complete(deps: AgentDeps, messages: Message[], toolList: unknown[]) {
