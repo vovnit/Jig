@@ -124,15 +124,25 @@ export interface WidgetSpec {
 }
 
 /**
- * One script module of the app (reserved: stored, never run yet). `code` is JS
- * source, `exports` the functions it offers for `run`, `elements` the custom
- * UI elements it offers for `custom` nodes.
+ * One script module of the app. `code` is JS source defining its exports on a
+ * global `exports` object; `libraries` are pinned browser builds loaded before
+ * it, in order; `network` lists the https hosts it may fetch from (empty: none).
  */
 export interface ScriptSpec {
   doc?: string;
   code: string;
   exports: string[];
   elements: string[];
+  libraries?: LibrarySpec[];
+  network?: string[];
+}
+
+/** A pinned browser build (UMD or IIFE) stored in the app; never fetched at run time. */
+export interface LibrarySpec {
+  name: string;
+  url: string;
+  sha256: string;
+  code?: string;
 }
 
 export interface PublishSpec {
@@ -165,7 +175,7 @@ export interface AppSpec {
   schedule?: Record<string, ScheduleEntry>;
   /** Home-screen widgets, rendered headlessly into static trees (see widgets.ts). */
   widgets?: Record<string, WidgetSpec>;
-  /** Reserved script modules, by name (stored, never run yet). */
+  /** Reserved script modules, by name (their exports run through `run`, their elements draw `custom`). */
   scripts?: Record<string, ScriptSpec>;
   /** Reusable templates: `{"type": "Card", "props": {...}}` reads them as `props.*`. */
   components?: Record<string, NodeSpec>;
@@ -331,7 +341,7 @@ export const NODE_TYPES: Record<string, NodeTypeInfo> = {
     props: { spec: "any", screen: "string", scale: "number", interactive: "boolean", selecting: "boolean", onSelect: "actions" },
   },
   custom: {
-    doc: "a custom element from the app's scripts (reserved: shows a placeholder)",
+    doc: "a custom element from the app's scripts (its function returns the node tree)",
     props: { element: "string", props: "any", onEvent: "actions" },
   },
 };
@@ -366,7 +376,7 @@ export const STYLE_KEYS: Record<string, ValueKind> = {
   transition: "transition",
 };
 
-export const ACTION_KINDS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call", "run"] as const;
+export const ACTION_KINDS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call", "run", "emit"] as const;
 export const FIELD_TYPES: FieldSpec["type"][] = ["string", "number", "boolean", "date", "datetime", "list", "object", "file"];
 
 // ---------- Capabilities (native-capabilities.md) ----------
@@ -394,6 +404,7 @@ export const CAPABILITIES: Record<string, CapabilityInfo> = {
   photos: { doc: "use photos you choose", asks: false },
   camera: { doc: "take photos", asks: true },
   vision: { doc: "send a photo to Meta's model to find things in it", asks: true },
+  network: { doc: "connect to the listed hosts from custom code", asks: true },
   share: { doc: "share things you choose", asks: false },
 };
 

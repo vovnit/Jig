@@ -46,14 +46,36 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   // Declared capabilities; using a live value or an async action without its own is rejected.
   const granted = new Set(Array.isArray(s.capabilities) ? s.capabilities : []);
   const grantedRead = new Set(Array.isArray(s.read) ? (s.read as unknown[]).filter((n): n is string => typeof n === "string") : []);
-  // Declared script modules (reserved): `run` names one of their exports, `custom` one of their elements.
-  const scripts = s.scripts && typeof s.scripts === "object" ? (s.scripts as Record<string, { exports?: unknown; elements?: unknown }>) : {};
+  // Declared script modules: `run` names one of their exports, `custom` one of their elements.
+  // Libraries are pinned to exact-version jsdelivr/unpkg https URLs; `network` lists plain hostnames.
+  const scripts = s.scripts && typeof s.scripts === "object" ? (s.scripts as Record<string, { exports?: unknown; elements?: unknown; libraries?: unknown; network?: unknown }>) : {};
   const scriptExports: string[] = [];
   const scriptElements: string[] = [];
   for (const [name, mod] of Object.entries(scripts)) {
     if (!mod || typeof mod !== "object") continue;
     if (Array.isArray(mod.exports)) for (const e of mod.exports) if (typeof e === "string") scriptExports.push(`${name}.${e}`);
     if (Array.isArray(mod.elements)) for (const e of mod.elements) if (typeof e === "string") scriptElements.push(`${name}.${e}`);
+    if (mod.libraries !== undefined) {
+      if (!Array.isArray(mod.libraries)) errors.push(`scripts.${name}.libraries: must be a list`);
+      else mod.libraries.forEach((lib, i) => {
+        const l = lib as { name?: unknown; url?: unknown; sha256?: unknown };
+        if (!l || typeof l !== "object") {
+          errors.push(`scripts.${name}.libraries[${i}]: must be {name, url, sha256}`);
+          return;
+        }
+        if (typeof l.name !== "string" || !l.name) errors.push(`scripts.${name}.libraries[${i}].name: must not be empty`);
+        const urlError = typeof l.url === "string" ? libraryUrlError(l.url) : "must be a URL string";
+        if (urlError) errors.push(`scripts.${name}.libraries[${i}].url: ${urlError}`);
+        if (typeof l.sha256 !== "string" || !/^[0-9a-f]{64}$/i.test(l.sha256)) errors.push(`scripts.${name}.libraries[${i}].sha256: must be a hex SHA-256`);
+      });
+    }
+    if (mod.network !== undefined) {
+      if (!Array.isArray(mod.network)) errors.push(`scripts.${name}.network: must be a list of hostnames`);
+      else mod.network.forEach((h, i) => {
+        const err = typeof h === "string" ? networkHostError(h) : "must be a hostname string";
+        if (err) errors.push(`scripts.${name}.network[${i}]: ${err}`);
+      });
+    }
   }
   // Names in scope shadow a live value of the same name (the scope reads it first):
   // data and state keys everywhere, loop variables and component `props` where they apply.
@@ -150,7 +172,7 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
         if (branch.then) checkActions(branch.then, `${w}.then`, scope);
         if (branch.else) checkActions(branch.else, `${w}.else`, scope);
       } else if ("run" in a) {
-        // Reserved custom code: names `<script>.<export>`; no capability is needed.
+        // Custom code: names `<script>.<export>`; a script's `network` asks through the gate, no capability needed.
         const r = a as { run?: unknown; then?: unknown; else?: unknown };
         if (typeof r.run === "string" && !r.run.includes("{{") && !scriptExports.includes(r.run)) {
           const near = closest(r.run, scriptExports);
@@ -344,6 +366,37 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
 }
 
 /** A node prop written as a bare expression (no {{ }}): `if`, `each`, `key`, `items`. */
+export function libraryUrlError(url: string): string | null {
+  // No URL here: the core runs in JavaScriptCore and QuickJS too.
+  const m = /^(https):\/\/([^/]+)(\/[^?#]*)$/.exec(url);
+  if (!m || m[1] !== "https") return "must be an https URL on cdn.jsdelivr.net/npm/ or unpkg.com with an exact version";
+  const host = m[2].toLowerCase();
+  const path = m[3];
+  if (host === "cdn.jsdelivr.net") {
+    if (!path.startsWith("/npm/") || !/@\d+\.\d+\.\d+/.test(path)) {
+      return "must be an exact-version jsdelivr URL like https://cdn.jsdelivr.net/npm/pkg@1.2.3/file.min.js";
+    }
+  } else if (host === "unpkg.com") {
+    if (!/@\d+\.\d+\.\d+/.test(path)) {
+      return "must be an exact-version unpkg URL like https://unpkg.com/pkg@1.2.3/file.min.js";
+    }
+  } else {
+    return "must be an https URL on cdn.jsdelivr.net/npm/ or unpkg.com with an exact version";
+  }
+  if (/[*^~<>=|]/.test(path) || /@(latest|next|beta|alpha|canary)(\/|$)/.test(path)) {
+    return "must pin an exact version, such as @1.2.3";
+  }
+  return null;
+}
+
+/** A plain hostname (`example.com`): no scheme, port, path or whitespace. */
+export function networkHostError(host: string): string | null {
+  if (!/^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)*[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/i.test(host)) {
+    return "must be a plain hostname, such as example.com";
+  }
+  return null;
+}
+
 function isBareExpr(type: string, key: string): boolean {
   if ((COMMON_PROPS[key] as string) === "expr") return true;
   return ((NODE_TYPES[TYPE_ALIASES[type] ?? type]?.props[key] as string) ?? "") === "expr";

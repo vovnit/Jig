@@ -79,7 +79,19 @@
     "gentlePlaying": false,
     "alarmOn": false,
     "awake": false,
-    "brightness": 1
+    "brightness": 1,
+    "chartValues": [3, 5, 2, 7, 4],
+    "tapped": null,
+    "doubled": ""
+  },
+  "scripts": {
+    "demos": {
+      "doc": "A run example and a bar chart element for the Code screen",
+      "code": "exports.double = function (args) { return Number(args.n) * 2; };\nexports.bars = function (props) {\n  var values = Array.isArray(props.values) ? props.values : [];\n  return {\n    type: 'row',\n    style: { gap: 6, align: 'end', height: 120 },\n    children: values.map(function (v, i) {\n      return {\n        type: 'column',\n        style: { width: 18, height: Math.max(4, Number(v) * 12), background: 'accent', radius: 4 },\n        onTap: { emit: i }\n      };\n    })\n  };\n};",
+      "exports": ["double"],
+      "elements": ["bars"],
+      "network": []
+    }
   },
   "screens": {
     "main": {
@@ -528,6 +540,14 @@
             "label": "Open media screen",
             "onTap": {
               "navigate": "media"
+            }
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Open code screen",
+            "onTap": {
+              "navigate": "code"
             }
           }
         ]
@@ -1029,6 +1049,95 @@
                 }
               }
             ]
+          }
+        ]
+      }
+    },
+    "code": {
+      "title": "Code",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 20
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Custom element"
+          },
+          {
+            "type": "text",
+            "value": "Bars from a list of numbers. Tap a bar to select it."
+          },
+          {
+            "type": "custom",
+            "element": "demos.bars",
+            "props": {
+              "values": "chartValues"
+            },
+            "onEvent": {
+              "set": "tapped",
+              "to": "value"
+            }
+          },
+          {
+            "type": "text",
+            "if": "tapped != null",
+            "value": "Tapped bar: {{tapped}}"
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "button",
+                "label": "Add a bar",
+                "onTap": {
+                  "push": "chartValues",
+                  "value": "len(chartValues) + 1"
+                }
+              },
+              {
+                "type": "button",
+                "label": "Reset",
+                "variant": "secondary",
+                "onTap": {
+                  "set": "chartValues",
+                  "to": "[3, 5, 2, 7, 4]"
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Run"
+          },
+          {
+            "type": "text",
+            "value": "Doubling with custom code."
+          },
+          {
+            "type": "button",
+            "label": "Double 21",
+            "onTap": {
+              "run": "demos.double",
+              "args": {
+                "n": "21"
+              },
+              "then": {
+                "set": "doubled",
+                "to": "value"
+              }
+            }
+          },
+          {
+            "type": "text",
+            "if": "doubled != ''",
+            "value": "Doubled: {{doubled}}"
           }
         ]
       }

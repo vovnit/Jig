@@ -10,6 +10,8 @@ import { openEpub, readEpubChapter, readEpubImage, type ZipSource } from "./epub
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, effectiveNow, freeIdentifiers, setIn, str } from "./expr.ts";
 import { type Box, type Frame, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "./signals.ts";
+import { schemaErrors, specSchema } from "./schema.ts";
+import { sha256Hex } from "./sha256.ts";
 import { projectPublisher } from "./shared.ts";
 import { DataStore } from "./store.ts";
 import { type Action, type Actions, type AppSpec, type ColorScheme, ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, type FieldSpec, type ListSpec, NODE_TYPES, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
@@ -240,6 +242,10 @@ export class Runtime {
   private globalScope: Scope;
   /** Bumped in `load` and `dispose`: async answers from an older generation are dropped. */
   private generation = 0;
+  /** Network host lists the gate already granted, by app id + `network:a.com,b.com`. */
+  private grantedNets = new Set<string>();
+  /** Custom element scopes (a rendered tree's root) → their `onEvent`, for `emit`. */
+  private customScopes = new WeakMap<Scope, { onEvent?: Actions; onScope: Scope }>();
 
   constructor(host: Host, options: RuntimeOptions = {}) {
     this.host = host;
@@ -279,6 +285,8 @@ export class Runtime {
     this.stopSharedLocal();
     this.pinned = screen && spec.screens[screen] ? screen : null;
     if (fresh || this.spec?.id !== spec.id) this.savedSecrets.clear();
+    // Network grants are per app: a different app asks again.
+    if (this.spec && this.spec.id !== spec.id) this.grantedNets.clear();
     if (fresh) {
       this.signals.clear();
       this.nav = new Signal<NavEntry[]>([]);
@@ -339,7 +347,9 @@ export class Runtime {
 
   /** Tears the app down: an embedded app whose `app` node went away. */
   dispose(): void {
+    const id = this.spec?.id;
     this.generation++;
+    this.grantedNets.clear();
     this.restoreDevice();
     this.screenOwner?.();
     this.screenOwner = null;
@@ -349,6 +359,14 @@ export class Runtime {
     this.stopSharedLocal();
     for (const e of this.embeds) e.rt.dispose();
     this.embeds.clear();
+    // The sandbox keeps nothing after the app closes.
+    if (id && this.spec.scripts && Object.keys(this.spec.scripts).length) {
+      try {
+        this.host.call?.call(this.host, "script.close", { app: id }, () => {});
+      } catch {
+        // Closing never fails the app.
+      }
+    }
   }
 
   /** Whether a node belongs to this runtime or an app embedded in it. */
@@ -1206,9 +1224,9 @@ export class Runtime {
           return;
         }
         // An embedded app reaches only its declared async services; the shell's stay shell-only.
-        // `script.run` forwards like one: the host answers it once custom code runs.
+        // `script.run`/`script.render` forward like ones: the host answers them once custom code runs.
         const parent = this.host.call;
-        if (parent && (Object.hasOwn(ASYNC_ACTIONS, service) || service === "script.run")) parent.call(this.host, service, args, done, progress);
+        if (parent && (Object.hasOwn(ASYNC_ACTIONS, service) || service === "script.run" || service === "script.render" || service === "script.close")) parent.call(this.host, service, args, done, progress);
         else done(null, "Not allowed");
       },
       // Embedded apps share the top-level runtime's host watches instead of starting their own.
@@ -1269,20 +1287,189 @@ export class Runtime {
   }
 
   /**
-   * A `custom` element (reserved): a placeholder box from existing primitives, since no
-   * host draws custom UI yet. `onEvent` is accepted and never fired.
+   * A `custom` element: its function runs in the app's sandbox and returns a node
+   * tree, validated like any spec node before it draws. Until the first answer the
+   * placeholder shows; an invalid tree or an error shows a small error box.
    */
   private buildCustom(spec: NodeSpec, scope: Scope, where: string): ViewNode {
     const name = typeof spec.element === "string" ? spec.element : "";
-    const raw = name.includes("{{") ? str(this.evalTemplate(name, scope, `${where}.element`) ?? "") : name;
     const node = this.buildPrimitive("column", { type: "column", onTap: spec.onTap }, [
       { style: { borderWidth: 1, borderColor: "border", radius: 12, padding: 12, background: "surface" }, scope },
       { style: spec.style, scope },
     ], scope, where);
-    const title = this.buildNode({ type: "text", variant: "caption", value: raw }, scope, `${where}~element`);
-    const note = this.buildNode({ type: "text", variant: "caption", value: "Custom element (not available yet)", style: { color: "muted" } }, scope, `${where}~note`);
-    this.setChildren(node, [title, note]);
+    const st: CustomState = { outer: node, scope, where, seq: 0, pending: false, element: "", propsJson: "", onEvent: spec.onEvent as Actions | undefined, settled: false, disposeTree: null };
+    const showPlaceholder = (element: string) => {
+      const title = this.buildNode({ type: "text", variant: "caption", value: element }, scope, `${where}~element`);
+      const note = this.buildNode({ type: "text", variant: "caption", value: "Loading…", style: { color: "muted" } }, scope, `${where}~note`);
+      this.setChildren(node, [title, note]);
+    };
+    const showError = (message: string) => {
+      const text = this.buildNode({ type: "text", variant: "caption", value: message, style: { color: "muted" } }, scope, `${where}~error`);
+      this.setChildren(node, [text]);
+    };
+    st.showError = showError;
+    showPlaceholder(name.includes("{{") ? str(this.evalTemplate(name, scope, `${where}.element`) ?? "") : name);
+    onCleanup(() => {
+      st.dead = true;
+      try {
+        st.disposeTree?.();
+      } catch {
+        // Disposing never fails the app.
+      }
+      st.disposeTree = null;
+    });
+    effect(() => {
+      const raw = typeof spec.element === "string" && spec.element.includes("{{")
+        ? str(this.evalTemplate(spec.element, scope, `${where}.element`) ?? "")
+        : (typeof spec.element === "string" ? spec.element : "");
+      const evaluated = this.evalValue((spec.props ?? {}) as Record<string, unknown>, scope, where);
+      const props = evaluated && typeof evaluated === "object" && !Array.isArray(evaluated) ? (evaluated as Record<string, unknown>) : {};
+      let json = "";
+      try {
+        json = JSON.stringify(props);
+      } catch {
+        json = String(st.seq);
+      }
+      untrack(() => {
+        st.onEvent = spec.onEvent as Actions | undefined;
+        const changed = raw !== st.element || json !== st.propsJson;
+        st.element = raw;
+        st.propsJson = json;
+        st.props = props;
+        if (!st.settled && changed) showPlaceholder(raw);
+        if (!changed && st.settled) return;
+        if (!changed && st.seq > 0) return;
+        if (st.pending) return;
+        st.pending = true;
+        this.host.requestFrame(() => {
+          st.pending = false;
+          if (!st.dead) this.requestCustomRender(st);
+        });
+      });
+    });
     return node;
+  }
+
+  /** Sends the latest `custom` props to the sandbox; older answers are dropped. */
+  private requestCustomRender(st: CustomState): void {
+    const seq = ++st.seq;
+    const gen = this.generation;
+    const spec = this.spec;
+    const ref = st.element;
+    const dot = ref.indexOf(".");
+    const script = dot < 0 ? ref : ref.slice(0, dot);
+    const element = dot < 0 ? "" : ref.slice(dot + 1);
+    const props = st.props ?? {};
+    const fail = (message: string) => {
+      if (seq !== st.seq || gen !== this.generation || st.dead) return;
+      st.settled = true;
+      st.showError?.(message);
+    };
+    const built = this.scriptSource(script);
+    if (!built) return fail(`Unknown script '${script}'`);
+    if (built.error) return fail(built.error);
+    void Promise.resolve()
+      .then(() => {
+        if (seq !== st.seq || gen !== this.generation || st.dead) return false;
+        if (!built.hosts.length) return true;
+        const key = networkKey(built.hosts);
+        if (this.grantedNets.has(`${spec.id} ${key}`)) return true;
+        if (!this.gate) return true;
+        return this.gate(spec, key);
+      })
+      .then((allowed) => {
+        if (seq !== st.seq || gen !== this.generation || st.dead) return;
+        if (!allowed) return fail("Not allowed");
+        if (built.hosts.length) this.grantedNets.add(`${spec.id} ${networkKey(built.hosts)}`);
+        const call = this.host.call;
+        if (!call) return;
+        let answered = false;
+        try {
+          call.call(this.host, "script.render", {
+            app: spec.id, script, element, props, code: built.source, hash: built.hash,
+            network: { allow: built.hosts }, timeoutMs: SCRIPT_TIMEOUT_MS,
+          }, (result, error) => {
+            if (answered) return;
+            answered = true;
+            if (seq !== st.seq || gen !== this.generation || st.dead) return;
+            if (error) return fail(error);
+            const tree = result && typeof result === "object" && "tree" in (result as Record<string, unknown>)
+              ? (result as Record<string, unknown>).tree
+              : result;
+            this.settleCustom(st, seq, gen, tree);
+          });
+        } catch (e) {
+          fail((e as Error).message);
+        }
+      })
+      .catch((e) => fail((e as Error).message));
+  }
+
+  /** Validates a rendered tree and draws it as the custom node's content. */
+  private settleCustom(st: CustomState, seq: number, gen: number, tree: unknown): void {
+    if (seq !== st.seq || gen !== this.generation || st.dead) return;
+    const problems = customTreeErrors(tree, this.spec.components);
+    if (problems.length) {
+      st.settled = true;
+      st.showError?.(problems[0]);
+      return;
+    }
+    const owner = getOwner();
+    // A rendered tree sees `props` and its own scope only: never the app's data or state.
+    const customScope = childScope(EMPTY_SCOPE, { props: st.props ?? {} });
+    this.customScopes.set(customScope, { onEvent: st.onEvent, onScope: st.scope });
+    const before = this.errors.length;
+    const box: { dispose: (() => void) | null; node: ViewNode | null } = { dispose: null, node: null };
+    try {
+      root((d) => {
+        box.dispose = d;
+        box.node = this.buildNode(tree as NodeSpec, customScope, `${st.where}~custom`);
+      }, owner);
+    } catch (e) {
+      try {
+        box.dispose?.();
+      } catch {
+        // Disposing never fails the app.
+      }
+      st.settled = true;
+      st.showError?.((e as Error).message);
+      return;
+    }
+    const fresh = this.errors.slice(before).filter((e) => e.where.startsWith(st.where));
+    if (fresh.length || !box.node) {
+      try {
+        box.dispose?.();
+      } catch {
+        // Disposing never fails the app.
+      }
+      st.settled = true;
+      st.showError?.(fresh[0]?.message ?? "Custom element failed");
+      return;
+    }
+    try {
+      st.disposeTree?.();
+    } catch {
+      // Disposing never fails the app.
+    }
+    st.disposeTree = box.dispose;
+    st.settled = true;
+    this.setChildren(st.outer, [box.node]);
+  }
+
+  /** Runs a custom tree's `emit`: the element's `onEvent` with `value`. */
+  private runEmit(a: Action, scope: Scope): void {
+    const where = `action ${JSON.stringify(a)}`;
+    const emit = (a as { emit?: unknown }).emit;
+    let s: Scope | undefined = scope;
+    let handler: { onEvent?: Actions; onScope: Scope } | undefined;
+    while (s) {
+      handler = this.customScopes.get(s);
+      if (handler) break;
+      s = (s as { parent?: Scope }).parent;
+    }
+    if (!handler?.onEvent) return this.error(where, "emit needs a custom element with onEvent");
+    const value = this.evalValue(emit, scope, where);
+    this.run(handler.onEvent, childScope(handler.onScope, { value }));
   }
 
   /** After the parent's layout: give the child its viewport, then run its frame. */
@@ -1998,6 +2185,8 @@ export class Runtime {
         service((this.evalValue(cl.args ?? {}, scope, where) ?? {}) as Record<string, unknown>);
       } else if ("run" in a) {
         return this.runScript(a, scope);
+      } else if ("emit" in a) {
+        return this.runEmit(a, scope);
       } else this.error(where, "Unknown action");
     } catch (e) {
       this.error(where, (e as Error).message);
@@ -2007,9 +2196,9 @@ export class Runtime {
   private deviceCleanup = new Map<string, Record<string, unknown>>();
 
   /**
-   * A `run` of custom code (reserved): evaluates `args`, then answers through the
-   * host's `script.run` service like an async action. No host offers it yet, so today
-   * it ends in `else` with "Custom code isn't available yet".
+   * A `run` of custom code: evaluates `args`, builds the script's sandbox source
+   * (libraries in order, then the script), asks the gate once per host list, and
+   * answers through the host's `script.run` like an async action.
    */
   private runScript(a: Action, scope: Scope): void {
     const where = `action ${JSON.stringify(a)}`;
@@ -2026,32 +2215,72 @@ export class Runtime {
     const args = evaluated && typeof evaluated === "object" && !Array.isArray(evaluated) ? (evaluated as Record<string, unknown>) : {};
     const spec = this.spec;
     const gen = this.generation;
-    const missing = "Custom code isn't available yet";
     const fail = (message: string) => {
       if (gen !== this.generation) return;
       if (r.else) this.run(r.else, childScope(scope, { error: message }));
       else this.error(where, message);
     };
-    const call = this.host.call;
-    if (!call) {
-      fail(missing);
+    const built = this.scriptSource(script);
+    if (!built) {
+      fail(`Unknown script '${script}'`);
       return;
     }
-    let answered = false;
-    try {
-      call.call(this.host, "script.run", { app: spec.id, script, fn, args }, (result, error) => {
-        if (answered) return;
-        answered = true;
-        if (gen !== this.generation) return;
-        if (error) {
-          const message = error === "Not allowed" || /No 'script\.run'|has no 'script\.run'/.test(error) ? missing : error;
-          if (r.else) this.run(r.else, childScope(scope, { error: message }));
-          else this.error(where, message);
-        } else if (r.then) this.run(r.then, childScope(scope, { value: result }));
-      });
-    } catch (e) {
-      fail((e as Error).message);
+    if (built.error) {
+      fail(built.error);
+      return;
     }
+    void Promise.resolve()
+      .then(() => {
+        if (gen !== this.generation) return false;
+        if (!built.hosts.length) return true;
+        const key = networkKey(built.hosts);
+        if (this.grantedNets.has(`${spec.id} ${key}`)) return true;
+        if (!this.gate) return true;
+        return this.gate(spec, key);
+      })
+      .then((allowed) => {
+        if (gen !== this.generation) return;
+        if (!allowed) {
+          if (r.else) this.run(r.else, childScope(scope, { error: "Not allowed" }));
+          else this.error(where, "Not allowed");
+          return;
+        }
+        if (built.hosts.length) this.grantedNets.add(`${spec.id} ${networkKey(built.hosts)}`);
+        const call = this.host.call;
+        if (!call) {
+          fail("Custom code isn't available yet");
+          return;
+        }
+        let answered = false;
+        try {
+          call.call(this.host, "script.run", {
+            app: spec.id, script, fn, args, code: built.source, hash: built.hash,
+            network: { allow: built.hosts }, timeoutMs: SCRIPT_TIMEOUT_MS,
+          }, (result, error) => {
+            if (answered) return;
+            answered = true;
+            if (gen !== this.generation) return;
+            if (error) {
+              const message = error === "Not allowed" || /No 'script\.run'|has no 'script\.run'/.test(error) ? "Custom code isn't available yet" : error;
+              if (r.else) this.run(r.else, childScope(scope, { error: message }));
+              else this.error(where, message);
+            } else {
+              const value = result && typeof result === "object" && "value" in (result as Record<string, unknown>) && Object.keys(result as object).length === 1
+                ? (result as Record<string, unknown>).value
+                : result;
+              if (r.then) this.run(r.then, childScope(scope, { value }));
+            }
+          });
+        } catch (e) {
+          fail((e as Error).message);
+        }
+      })
+      .catch((e) => fail((e as Error).message));
+  }
+
+  /** A script's sandbox source (libraries' code in order, then its own), its cache hash and hosts. */
+  private scriptSource(name: string): { source: string; hash: string; hosts: string[]; error?: string } | null {
+    return scriptBundle(this.spec, name);
   }
 
   private restoreDevice(): void {
@@ -2577,6 +2806,75 @@ function textSpans(v: unknown): { text: string; ranges: TextSpanStyle[] } | null
 
 function messageOf(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** Per-call time budget the host enforces (it drops and recreates the sandbox). */
+const SCRIPT_TIMEOUT_MS = 5000;
+
+/** The empty root a custom tree's scope grows from: no app data or state, only `props`. */
+const EMPTY_SCOPE: Scope = { lookup: () => undefined, has: () => false };
+
+/** One `custom` node's render state. */
+interface CustomState {
+  outer: ViewNode;
+  scope: Scope;
+  where: string;
+  seq: number;
+  pending: boolean;
+  element: string;
+  propsJson: string;
+  props?: Record<string, unknown>;
+  onEvent?: Actions;
+  settled: boolean;
+  dead?: boolean;
+  disposeTree: (() => void) | null;
+  showError?: (message: string) => void;
+}
+
+/** A script's sandbox source, shared by the runtime and the builder's test_script. */
+export function scriptBundle(spec: AppSpec, name: string): { source: string; hash: string; hosts: string[]; error?: string } | null {
+  const mod = spec.scripts?.[name];
+  if (!mod) return null;
+  for (const lib of mod.libraries ?? []) {
+    // Without its source a library is refused; with one, the source must match its hash.
+    if (typeof lib.code !== "string" || !lib.code) return { source: "", hash: "", hosts: [], error: `A library was changed: ${lib.name}` };
+    let hex = "";
+    try {
+      hex = sha256Hex(lib.code).toLowerCase();
+    } catch {
+      hex = "";
+    }
+    if (hex !== String(lib.sha256 ?? "").toLowerCase()) return { source: "", hash: "", hosts: [], error: `A library was changed: ${lib.name}` };
+  }
+  const source = [...(mod.libraries ?? []).map((l) => (typeof l.code === "string" ? l.code : "")), mod.code ?? ""].join("\n");
+  const hosts = [...new Set((mod.network ?? []).filter((h): h is string => typeof h === "string"))];
+  return { source, hash: scriptHash(source), hosts };
+}
+
+/** The gate key for a host list: per app and host list, so new hosts ask again. */
+export function networkKey(hosts: string[]): string {
+  return `network:${[...hosts].sort().join(",")}`;
+}
+
+/** A small, fast non-crypto hash (FNV-1a) of sandbox source, as the cache key. */
+export function scriptHash(source: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < source.length; i++) {
+    h ^= source.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** Problems with a rendered tree against the spec's node schema; empty when it draws. */
+export function customTreeErrors(tree: unknown, components?: Record<string, NodeSpec>): string[] {
+  if (!tree || typeof tree !== "object" || Array.isArray(tree)) return ["Custom element must return a node"];
+  // With the app's components (never the model's open tool schema): an unknown
+  // type is rejected here instead of drawing nothing.
+  const schema = specSchema(components ?? {});
+  const defs = schema.$defs ?? {};
+  const errors = schemaErrors(tree, { $defs: defs, $ref: "#/$defs/node" });
+  return errors;
 }
 
 /** Async actions that carry the app's id to the host's per-app file store. */

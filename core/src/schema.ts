@@ -196,6 +196,7 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
           action("if", { if: expr, then: ref("actions"), else: ref("actions") }, ["then"]),
           action("call", { call: { type: "string" }, args: { type: "object" } }),
           action("run", { run: { type: "string" }, args: { type: "object" }, then: ref("actions"), else: ref("actions") }),
+          action("emit", { emit: {} }),
           ...asyncActions,
         ],
         description: `an action: ${ACTION_KINDS.join(", ")}`,
@@ -285,6 +286,19 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
               code: { type: "string" },
               exports: { type: "array", items: { type: "string" } },
               elements: { type: "array", items: { type: "string" } },
+              libraries: {
+                type: "array",
+                items: {
+                  type: "object", title: "library", required: ["name", "url", "sha256"], additionalProperties: false,
+                  properties: {
+                    name: { type: "string" },
+                    url: { type: "string" },
+                    sha256: { type: "string" },
+                    code: { type: "string" },
+                  },
+                },
+              },
+              network: { type: "array", items: { type: "string" } },
             },
           } },
           screens: { type: "object", additionalProperties: ref("screen"), minProperties: 1 },

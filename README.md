@@ -210,14 +210,13 @@ The container's own UI is a Jig app too: [`specs/shell.json`](specs/shell.json),
 
 The runtime is our own trusted JS. An app is a JSON spec with simple expressions for bindings and actions, so the "no arbitrary code" claim holds. If model-written scripts are ever allowed, they should run in a separate QuickJS context with memory and time limits.
 
-### Custom code (reserved)
+### Custom code
 
-Apps stay JSON specs. Reserved for later: `scripts` (named JS modules with `code`, `exports` and `elements`), the `run` action (`{"run": "convert.csvToJson", "args": {...}, "then": [...], "else": [...]}`) and the `custom` node (`{"type": "custom", "element": "charts.barChart", "props": {...}, "onEvent": actions}`). Nothing runs yet: `run` answers `else`, and `custom` shows a placeholder.
+Apps stay JSON specs. Custom code is for what the spec's expressions can't do: converting file formats, parsing, math with a library, calling a web API. See [docs/custom-code.md](docs/custom-code.md).
 
-- Each app's modules run in their own sandbox (a separate QuickJS / JSContext, a Worker on the web) with memory and time limits.
-- Code reaches only declared capabilities (a future `network` capability with listed domains).
-- Libraries are pinned into the app at build time, not fetched at run time.
-- The UI stays the spec: code computes, and draws only inside `custom` elements (which send back `onEvent` with `value`).
+- An app's code lives in its `scripts` (JS on an `exports` object, with pinned `libraries` and a `network` host list) and runs in a sandbox of its own: a Web Worker on the web, a separate JS context natively, with a 5 s limit per call.
+- The UI is still the spec: code computes values (`run`, answering `then` with `value` or `else` with `error`) and builds node trees for `custom` elements, which the runtime validates and draws natively (`emit` answers back through `onEvent`).
+- The builder writes code with `set_script` (as a ```js block), pins libraries with `add_library` (exact-version jsdelivr/unpkg URLs with SHA-256) and checks both with `test_script`.
 
 ### Custom controls
 
@@ -277,7 +276,8 @@ After profiling, if needed:
 - [x] Water tracker
 - [x] Kid's chore chart
 - [x] Medication log for a parent, with a daily reminder while doses are left
-- [x] Showcase screens for the device (slider, time picker, location, sun times, compass), media and files
+- [x] Showcase screens for the device (slider, time picker, location, sun times, compass), media and files, and custom code (a Code screen with a `custom` bar chart and a `run` example)
+- [x] Converter: a text file converted between CSV, JSON, YAML and Markdown table with `run` and pinned libraries
 - [x] EPUB reader: a library of books opened from files, each read chapter by chapter as styled text with links, the place in every book remembered
 - [x] Workout log that feeds a meal planner (shared data store demo)
 - [x] Pantry inventory from a shelf photo (SAM demo)

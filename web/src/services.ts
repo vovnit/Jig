@@ -1,4 +1,5 @@
 import { setSchedule } from "./schedules.ts";
+import { sandboxCall } from "./sandbox.ts";
 import { setWidgets } from "./widgets.ts";
 import type { Occurrence } from "../../core/src/schedule.ts";
 import type { WidgetUpdate } from "@jig/core";
@@ -16,6 +17,7 @@ function proxied(url: string): string {
 }
 
 export function callService(service: string, args: Record<string, unknown>, done: Done, progress?: Progress): void {
+  if (sandboxCall(service, args, done)) return;
   switch (service) {
     case "schedule.set":
       setSchedule(String(args.app), (args.items ?? []) as Occurrence[]).then(() => done({}), e => done(null, e.message));

@@ -9,10 +9,13 @@
 // model loses a bracket or a quote. The conversation is kept here and sent whole each step
 // (the API's stored responses expire within a minute or two).
 import { acyclic, type Schema, specSchema } from "../schema.ts";
+import { sha256Hex } from "../sha256.ts";
 import type { AppSpec } from "../spec.ts";
+import { customTreeErrors, scriptBundle } from "../runtime.ts";
+import { utf8Bytes } from "../sha256.ts";
 import { applyPatch, type PatchOp } from "./patch.ts";
 import { systemPrompt } from "./prompt.ts";
-import { specProblems } from "./validate.ts";
+import { libraryUrlError, networkHostError, specProblems } from "./validate.ts";
 
 export interface ModelSettings {
   apiKey: string;
@@ -48,7 +51,7 @@ export interface HttpRequest {
 export interface AgentDeps {
   settings: ModelSettings;
   /** With `onLine`, a streamed body's lines go there and `body` may be empty. */
-  http: (req: HttpRequest, onLine?: (line: string) => void) => Promise<{ status: number; body: string }>;
+  http: (req: HttpRequest, onLine?: (line: string) => void) => Promise<{ status: number; body: string; headers?: Record<string, string> }>;
   getSpec: () => AppSpec;
   /** Saves a validated spec (with undo history); the preview hot-reloads. */
   commit: (spec: AppSpec) => void;
@@ -57,6 +60,11 @@ export interface AgentDeps {
   collections?: () => string;
   /** A PNG of a screen as it renders now, base64; absent where the host can't take one. */
   screenshot?: (screen?: string) => Promise<string | null>;
+  /** The app's sandbox, for test_script (absent where the host can't run code). */
+  scripts?: {
+    run: (args: Record<string, unknown>) => Promise<unknown>;
+    render: (args: Record<string, unknown>) => Promise<unknown>;
+  };
   /** Adds an entry to the log and returns its id. */
   log: (entry: Omit<LogEntry, "id">) => string;
   /** Changes an entry while it is being written (a thought as it streams). */
@@ -145,6 +153,25 @@ function tools(withScreenshots: boolean) {
       $defs,
     ),
     ...(withScreenshots ? [fn("screenshot", "See a screen of the app as it renders now.", { screen: { type: "string", description: "Screen name; default: the one the user is looking at" } }, [])] : []),
+    fn("set_script", "Write a script module: use for what expressions and actions can't do (format conversion, parsing, libraries, web APIs). Write the code in your message as one ```js block (as exports.fn = (args) => ...), then call set_script with the names it offers.", {
+      name: { type: "string", description: "Script name, used as run's \"script.fn\" prefix and custom's \"script.element\"" },
+      exports: { type: "array", items: { type: "string" }, description: "Functions run calls, each taking one object argument" },
+      elements: { type: "array", items: { type: "string" }, description: "UI elements custom nodes render, each taking props and returning a node tree" },
+      doc: { type: "string" },
+      network: { type: "array", items: { type: "string" }, description: "https hosts the code may fetch from (exact names, empty: none)" },
+    }, ["name"]),
+    fn("add_library", "Pin a browser build (UMD or IIFE) into a script: an exact-version jsdelivr/unpkg https URL. Downloaded with the shell's http, stored with its SHA-256; the model never sees the source.", {
+      script: { type: "string" },
+      name: { type: "string", description: "Library name" },
+      url: { type: "string", description: "Exact-version URL, e.g. https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js" },
+    }, ["script", "name", "url"]),
+    fn("test_script", "Run a script function or element in the app's sandbox before finishing. Returns the value, or the tree and whether it validates, or the error.", {
+      script: { type: "string" },
+      fn: { type: "string", description: "Function to run with args" },
+      args: { type: "object", description: "The function's single object argument" },
+      element: { type: "string", description: "Element to render with props" },
+      props: { type: "object", description: "The element's props" },
+    }, ["script"]),
     fn("finish", "End the turn with a short message to the user.", {
       message: { type: "string" },
     }, ["message"]),
@@ -155,6 +182,9 @@ const WORKING: Record<string, string> = {
   set_spec: "Writing the app",
   apply_patch: "Changing the app",
   screenshot: "Looking at the screen",
+  set_script: "Writing code",
+  add_library: "Adding a library",
+  test_script: "Testing the code",
   finish: "Finishing",
 };
 
@@ -194,7 +224,7 @@ export async function runEdit(deps: AgentDeps, request: EditRequest): Promise<Ed
     deps.log({ role: "user", text: `“${text}”` });
   }
   const shared = deps.collections?.() ?? "";
-  const context = `Current spec:\n\`\`\`json\n${JSON.stringify(deps.getSpec())}\n\`\`\`\n${viewText(deps.view())}${shared ? `\nShared collections on this device:\n${shared}` : ""}`;
+  const context = `Current spec:\n\`\`\`json\n${JSON.stringify(modelSpec(deps.getSpec()))}\n\`\`\`\n${viewText(deps.view())}${shared ? `\nShared collections on this device:\n${shared}` : ""}`;
   const lead = request.continueFrom ? "You ran out of steps last time; carry on from where you stopped. " : "";
   const conversation: unknown[] = [
     ...(request.continueFrom ?? []),
@@ -246,7 +276,7 @@ export async function runEdit(deps: AgentDeps, request: EditRequest): Promise<Ed
         }
         if (call.name === "set_spec" && args.spec === undefined) args.spec = jsonBlock(said);
         status(WORKING[call.name] ?? "Working");
-        const result = await runTool(deps, call.name, args, images, prose(said));
+        const result = await runTool(deps, call.name, args, images, prose(said), said);
         if (result === FINISHED) finished = true;
         conversation.push({ type: "function_call_output", call_id: call.call_id, output: result === FINISHED ? "ok" : result });
       }
@@ -271,6 +301,7 @@ const parses = (json: string) => {
 };
 
 const FENCE = /```(?:json)?[ \t]*\n([\s\S]*?)\n?```/g;
+const JS_FENCE = /```(?:js|javascript)[ \t]*\n([\s\S]*?)\n?```/g;
 
 /** The last ```json block of a message, as text (parsed by set_spec, which reports its errors). */
 function jsonBlock(text: string): string | undefined {
@@ -279,6 +310,47 @@ function jsonBlock(text: string): string | undefined {
   const open = text.lastIndexOf("```");
   // An unclosed block: the message was cut off, or the model forgot the closing fence.
   return open >= 0 ? text.slice(open).replace(/^```(?:json)?[ \t]*\n?/, "") : undefined;
+}
+
+/** The last ```js block of a message: a script's code, like set_spec's ```json block. */
+function jsBlock(text: string): string | undefined {
+  const blocks = [...text.matchAll(JS_FENCE)];
+  if (blocks.length) return blocks.at(-1)![1];
+  return undefined;
+}
+
+/** The spec as the model sees it: each library as {name, url, size}, never its source. */
+export function modelSpec(spec: AppSpec): AppSpec {
+  const out = JSON.parse(JSON.stringify(spec)) as AppSpec;
+  for (const mod of Object.values(out.scripts ?? {})) {
+    if (!Array.isArray(mod.libraries)) continue;
+    mod.libraries = mod.libraries.map((l) => {
+      const lib = l as { name?: unknown; url?: unknown; code?: unknown };
+      const size = typeof lib.code === "string" ? utf8Bytes(lib.code).length : 0;
+      return { name: lib.name, url: lib.url, size } as unknown as typeof l;
+    });
+  }
+  return out;
+}
+
+/** An edit that drops a library's code keeps the stored source (the model never sees it). */
+function restoreLibraryCode(current: AppSpec, next: AppSpec): void {
+  const have = current.scripts ?? {};
+  for (const [name, mod] of Object.entries(next.scripts ?? {})) {
+    if (!Array.isArray(mod.libraries)) continue;
+    const old = Array.isArray(have[name]?.libraries) ? have[name].libraries! : [];
+    mod.libraries = mod.libraries.map((l) => {
+      const lib = l as { name?: unknown; url?: unknown; code?: unknown; sha256?: unknown; size?: unknown };
+      // The model writes what it saw ({name, url, size}): `size` is view-only.
+      delete lib.size;
+      if (typeof lib.code === "string" && lib.code) return l;
+      const match = old.find((o) => o.name === lib.name && (lib.url === undefined || o.url === lib.url));
+      if (match && typeof match.code === "string" && match.code) {
+        return { ...lib, code: match.code, sha256: lib.sha256 ?? match.sha256 } as typeof l;
+      }
+      return l;
+    });
+  }
 }
 
 /** What the model said, without the spec it wrote. */
@@ -309,7 +381,7 @@ function decoded(value: unknown, name: string): unknown {
 }
 
 /** Runs a tool call; `spoken` is what the model already said in this step (shown in the log). */
-async function runTool(deps: AgentDeps, name: string, args: Record<string, unknown>, images: string[], spoken = ""): Promise<string | typeof FINISHED> {
+async function runTool(deps: AgentDeps, name: string, args: Record<string, unknown>, images: string[], spoken = "", full = ""): Promise<string | typeof FINISHED> {
   switch (name) {
     case "apply_patch":
     case "set_spec": {
@@ -320,6 +392,7 @@ async function runTool(deps: AgentDeps, name: string, args: Record<string, unkno
         deps.log({ role: "step", text: `Fixing a change that didn't apply` });
         return `Not applied: ${(e as Error).message}`;
       }
+      restoreLibraryCode(deps.getSpec(), next);
       const { errors, unfinished } = specProblems(next);
       if (errors.length) {
         deps.log({ role: "step", text: `Fixing ${errors.length === 1 ? "a problem" : `${errors.length} problems`}: ${errors[0]}` });
@@ -329,6 +402,122 @@ async function runTool(deps: AgentDeps, name: string, args: Record<string, unkno
       deps.log({ role: "step", text: name === "set_spec" ? "Wrote the app" : "Changed the app" });
       if (unfinished.length) return `Applied. The user sees the change now. Still to do before you finish:\n${unfinished.slice(0, 12).join("\n")}`;
       return "Applied. The user sees the change now.";
+    }
+    case "set_script": {
+      const script = String(args.name ?? "").trim();
+      if (!script) return "Not applied: pass the script's name.";
+      const strList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+      const code = typeof args.code === "string" && args.code ? args.code : jsBlock(full);
+      if (!code) return "Not applied: write the code in your message as one ```js block, then call set_script.";
+      let network: string[] | undefined;
+      if (args.network !== undefined) {
+        if (!Array.isArray(args.network) || !args.network.every((h) => typeof h === "string")) return "Not applied: network is a list of hostnames.";
+        for (const h of args.network as string[]) {
+          const err = networkHostError(h);
+          if (err) return `Not applied: network '${h}': ${err}.`;
+        }
+        network = [...(args.network as string[])];
+      }
+      const current = deps.getSpec();
+      const next = JSON.parse(JSON.stringify(current)) as AppSpec;
+      next.scripts = next.scripts ?? {};
+      const prev = current.scripts?.[script];
+      next.scripts[script] = {
+        ...(typeof args.doc === "string" && args.doc ? { doc: args.doc } : prev?.doc ? { doc: prev.doc } : {}),
+        code,
+        exports: strList(args.exports),
+        elements: strList(args.elements),
+        ...(network !== undefined ? { network } : prev?.network ? { network: prev.network } : {}),
+        ...(prev?.libraries ? { libraries: prev.libraries } : {}),
+      };
+      const { errors, unfinished } = specProblems(next);
+      if (errors.length) {
+        deps.log({ role: "step", text: `Fixing ${errors.length === 1 ? "a problem" : `${errors.length} problems`}: ${errors[0]}` });
+        return `Not applied, the spec has errors:\n${errors.slice(0, 12).join("\n")}`;
+      }
+      deps.commit(next);
+      deps.log({ role: "step", text: `Wrote script '${script}'` });
+      if (unfinished.length) return `Applied. The user sees the change now. Still to do before you finish:\n${unfinished.slice(0, 12).join("\n")}`;
+      return "Applied. The user sees the change now.";
+    }
+    case "add_library": {
+      const script = String(args.script ?? "");
+      const libName = String(args.name ?? "");
+      const url = String(args.url ?? "");
+      if (!script || !libName || !url) return "Not applied: pass script, name and url.";
+      const current = deps.getSpec();
+      if (!current.scripts?.[script]) return `Not applied: no script named '${script}'.`;
+      if (!url.startsWith("https://")) return "Not applied: the URL must be https.";
+      const pinned = libraryUrlError(url);
+      if (pinned) return `Not applied: ${pinned}.`;
+      let res: { status: number; body: string; headers?: Record<string, string> };
+      try {
+        res = await deps.http({ url, method: "GET", headers: {}, body: "" });
+      } catch (e) {
+        return `Not applied: couldn't download '${url}': ${(e as Error).message}`;
+      }
+      if (res.status >= 400) return `Not applied: couldn't download '${url}': status ${res.status}.`;
+      const type = res.headers ? (res.headers["content-type"] ?? res.headers["Content-Type"] ?? "") : "";
+      if (type && !/javascript|ecmascript/i.test(type.split(";")[0])) {
+        return `Not applied: '${url}' isn't JavaScript (content type '${type.split(";")[0]}').`;
+      }
+      const bytes = utf8Bytes(res.body).length;
+      if (bytes > 512 * 1024) return `Not applied: '${url}' is larger than 512 KB.`;
+      const sha256 = sha256Hex(res.body);
+      const next = JSON.parse(JSON.stringify(current)) as AppSpec;
+      const libs = [...(next.scripts![script].libraries ?? []).filter((l) => l.name !== libName)];
+      libs.push({ name: libName, url, sha256, code: res.body });
+      next.scripts![script].libraries = libs;
+      const { errors } = specProblems(next);
+      if (errors.length) return `Not applied, the spec has errors:\n${errors.slice(0, 12).join("\n")}`;
+      deps.commit(next);
+      deps.log({ role: "step", text: `Added library '${libName}'` });
+      return `Applied: stored '${libName}' (${bytes} bytes, sha256 ${sha256}).`;
+    }
+    case "test_script": {
+      const script = String(args.script ?? "");
+      const current = deps.getSpec();
+      const bundle = scriptBundle(current, script);
+      if (!bundle) return `No script named '${script}'.`;
+      if (bundle.error) return `error: ${bundle.error}`;
+      if (!deps.scripts) return "No sandbox available here.";
+      try {
+        if (typeof args.fn === "string") {
+          const fn = args.fn;
+          const fnArgs = args.args !== undefined ? args.args : {};
+          const res = await deps.scripts.run({
+            app: current.id, script, fn, args: fnArgs, code: bundle.source, hash: bundle.hash,
+            network: { allow: bundle.hosts }, timeoutMs: 5000,
+          }) as { value?: unknown; error?: unknown } | unknown;
+          if (res && typeof res === "object" && "error" in (res as Record<string, unknown>)) {
+            return `error: ${String((res as Record<string, unknown>).error ?? (res as Record<string, unknown>).message ?? "Failed")}`;
+          }
+          const value = res && typeof res === "object" && "value" in (res as Record<string, unknown>) && Object.keys(res as object).length === 1
+            ? (res as Record<string, unknown>).value
+            : res;
+          return `value: ${JSON.stringify(value)}`;
+        }
+        if (typeof args.element === "string") {
+          const element = args.element;
+          const props = args.props !== undefined ? args.props : {};
+          const res = await deps.scripts.render({
+            app: current.id, script, element, props, code: bundle.source, hash: bundle.hash,
+            network: { allow: bundle.hosts }, timeoutMs: 5000,
+          }) as { tree?: unknown; error?: unknown } | unknown;
+          if (res && typeof res === "object" && "error" in (res as Record<string, unknown>)) {
+            return `error: ${String((res as Record<string, unknown>).error ?? (res as Record<string, unknown>).message ?? "Failed")}`;
+          }
+          const tree = res && typeof res === "object" && "tree" in (res as Record<string, unknown>)
+            ? (res as Record<string, unknown>).tree
+            : res;
+          const problems = customTreeErrors(tree, current.components);
+          const valid = problems.length ? `no: ${problems.slice(0, 3).join("; ")}` : "yes";
+          return `tree: ${JSON.stringify(tree)}\nvalidates: ${valid}`;
+        }
+        return "Not applied: pass fn with args, or element with props.";
+      } catch (e) {
+        return `error: ${(e as Error).message}`;
+      }
     }
     case "screenshot": {
       const png = await deps.screenshot?.(typeof args.screen === "string" ? args.screen : undefined).catch(() => null);

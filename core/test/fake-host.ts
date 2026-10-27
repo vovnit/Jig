@@ -198,6 +198,9 @@ export function makeHost(db = makeDb(), vault = new Map<string, string>()): Test
         const handles = specs.map((s) => handleOf(storePick(host, app, s, service)));
         return void done(multiple ? handles : handles[0]);
       }
+      if (service === "script.run") return void runSandbox(host, args, done, false);
+      if (service === "script.render") return void runSandbox(host, args, done, true);
+      if (service === "script.close") return void done({});
       done(null, `No '${service}' service`);
     },
     requestFrame(cb) {
@@ -212,6 +215,39 @@ export function makeHost(db = makeDb(), vault = new Map<string, string>()): Test
 
 /** In-memory file store behind `files.*` and the pickers. */
 let fileSeq = 1;
+
+/**
+ * The fake sandbox: runs `code` in a fresh `node:vm` context per call (tests only;
+ * core itself uses no Node APIs). `script.run` calls `exports[fn](args)`; render
+ * calls `exports[element](props)`. Answers `{value}` / `{tree}`, or the error message.
+ */
+async function runSandbox(
+  host: TestHost,
+  args: Record<string, unknown>,
+  done: (result: unknown, error?: string) => void,
+  render: boolean,
+): Promise<void> {
+  const a = args as { code?: unknown; fn?: unknown; element?: unknown; args?: unknown; props?: unknown };
+  const code = typeof a.code === "string" ? a.code : "";
+  const name = render ? String(a.element ?? "") : String(a.fn ?? "");
+  const input = render ? a.props : a.args;
+  try {
+    const vm = await import("node:vm");
+    const exports: Record<string, unknown> = {};
+    const sandbox: Record<string, unknown> = { exports, console: { log: () => {} } };
+    vm.createContext(sandbox);
+    const script = new vm.Script(`${code}\n;exports;`);
+    script.runInContext(sandbox);
+    const fn = (sandbox.exports as Record<string, unknown>)[name];
+    if (typeof fn !== "function") throw new Error(render ? `No element '${name}'` : `No export '${name}'`);
+    const out = await (fn as (input: unknown) => unknown)(input);
+    const json = JSON.stringify(out ?? null);
+    if (json.length > 2 * 1024 * 1024) throw new Error("Result too large");
+    done(render ? { tree: out } : { value: out });
+  } catch (e) {
+    done(null, (e as Error).message);
+  }
+}
 
 function appFiles(host: TestHost, app: string): Map<string, TestFile> {
   let m = host.files.get(app);

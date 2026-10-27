@@ -34,6 +34,12 @@ export function installBuilder(shell: Runtime): void {
       shell.hostCall("http", req as unknown as Record<string, unknown>, onLine && ((u) => typeof u.line === "string" && onLine(u.line))),
     getSpec: () => findApp(shell, id)?.spec as AppSpec,
     screenshot: shell.host.call ? (screen) => screenshot(id, screen) : undefined,
+    scripts: shell.host.call
+      ? {
+        run: (args) => shell.hostCall("script.run", args),
+        render: (args) => shell.hostCall("script.render", args),
+      }
+      : undefined,
     commit: (spec) => commitEdit(shell, id, { ...spec, id }),
     view: (): BuilderView => {
       const spec = findApp(shell, id)?.spec;
@@ -163,6 +169,11 @@ function installGate(shell: Runtime): void {
   /** Questions in order: the first is the one on screen (`asking`). */
   const queue: { app: string; appName: string; capability: string; text: string }[] = [];
   const key = (app: string, capability: string) => `${app} ${capability}`;
+  const networkText = (capability: string): string | null => {
+    if (!capability.startsWith("network:")) return null;
+    const hosts = capability.slice("network:".length);
+    return hosts || null;
+  };
   const sharedText = (app: AppSpec, capability: string): string | null => {
     if (!capability.startsWith("shared.")) return null;
     const name = capability.slice("shared.".length);
@@ -180,7 +191,8 @@ function installGate(shell: Runtime): void {
     if (pending) return new Promise<boolean>((resolve) => pending.push(resolve));
     const resolvers: ((allow: boolean) => void)[] = [];
     waiting.set(k, resolvers);
-    const question = { app: app.id, appName: app.name, capability, text: sharedText(app, capability) ?? `${app.name} wants to ${CAPABILITIES[capability]?.doc ?? capability}.` };
+    const hosts = networkText(capability);
+    const question = { app: app.id, appName: app.name, capability, text: hosts ? `${app.name} wants to connect to ${hosts}.` : sharedText(app, capability) ?? `${app.name} wants to ${CAPABILITIES[capability]?.doc ?? capability}.` };
     queue.push(question);
     // The first question goes on screen; the rest wait their turn.
     if (queue.length === 1) shell.set("asking", question);

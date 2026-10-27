@@ -104,7 +104,7 @@ test("an edit applies a patch, repairs a rejected one, and finishes", async () =
   assert.match(JSON.stringify(requests[1].input[0]), /Current spec/);
   assert.equal(requests[1].input[1].type, "function_call");
   assert.match(lastOutput(requests[1]), /Not applied, the spec has errors/);
-  assert.deepEqual(requests[0].tools.map((t) => t.name), ["apply_patch", "set_spec", "screenshot", "finish"]);
+  assert.deepEqual(requests[0].tools.map((t) => t.name), ["apply_patch", "set_spec", "screenshot", "set_script", "add_library", "test_script", "finish"]);
   // The tools that write specs carry the spec's JSON Schema.
   const params = (name: string) => requests[0].tools.find((t) => t.name === name)!.parameters;
   assert.equal(params("set_spec").properties.spec.$ref, "#/$defs/app");

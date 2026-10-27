@@ -7,7 +7,7 @@ import { ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, NODE_TYPES, STYLE_KEYS } fr
 /** One line per node type with the props it takes, e.g. `- button {label, variant: primary|...}: a button`. */
 function nodeTypes(): string {
   return Object.entries(NODE_TYPES)
-    .filter(([t]) => t !== "app" && t !== "custom")
+    .filter(([t]) => t !== "app")
     .map(([t, info]) => {
       const props = Object.entries(info.props).map(([k, v]) => (Array.isArray(v) ? `${k}: ${v.join("|")}` : k));
       if (info.children) props.unshift("children");
@@ -79,6 +79,9 @@ Count and locate things in a photo (a shelf, a bookshelf, a parking lot): {"find
 An app declares what of the container it uses: "capabilities": ["clock"]. Reading a live value or running an async action without declaring its capability is rejected.
 ${capabilities()}
 - Sun: with location, sunTimes(location.lat, location.lon, today()) gives today's sunrise and sunset there, and sunPosition(location.lat, location.lon, now()) the sun's place now; read them only once location isn't null.
+
+## Custom code
+Use expressions and the built-in actions when they're enough; use code only for what they can't do: format conversion, parsing, math with a library, web APIs. A script's code is plain JS defining exports on \`exports\` (exports.fn = (args) => ...); functions take one object argument and return a value or a Promise. {"run": "script.fn", "args": {...}, "then": actions, "else": actions} runs it ("then" gets value, "else" gets error). {"type": "custom", "element": "script.name", "props": {...}, "onEvent": actions} draws the returned node tree; inside it {"emit": expr} runs onEvent with value. A script's "network" lists the https hosts it may fetch from. Tools: set_script (code as one \`\`\`js block), add_library {script, name, url} (exact-version jsdelivr/unpkg https, pinned with SHA-256), test_script {script, fn, args} or {script, element, props}. Code sees no app data except what's passed in.
 
 ## Shared data
 Apps publish lists for other apps, which read them with the user's permission: only a container can share data this way.

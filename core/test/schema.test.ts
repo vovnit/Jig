@@ -9,7 +9,7 @@ const load = (n: string): AppSpec => JSON.parse(readFileSync(new URL(`../../spec
 const app = (body: unknown, extra: Partial<AppSpec> = {}): AppSpec => ({ id: "t", name: "T", screens: { main: { body } }, ...extra }) as AppSpec;
 
 test("every bundled spec conforms to the schema, the shell included", () => {
-  for (const n of ["chores", "meds", "showcase", "water"]) assert.deepEqual(validateSpec(load(n)), [], n);
+  for (const n of ["chores", "meds", "showcase", "water", "converter"]) assert.deepEqual(validateSpec(load(n)), [], n);
   const shell = load("shell");
   assert.deepEqual(schemaErrors(shell, specSchema(shell.components)), []);
 });
