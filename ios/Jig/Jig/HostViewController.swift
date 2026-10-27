@@ -1,21 +1,13 @@
 import UIKit
 
-/// Root surface for the Jig runtime: owns the UIKit renderer and the JS runtime,
-/// keeps the runtime's viewport, keyboard and appearance in sync, and switches
-/// between bundled app specs.
+/// Root surface for the Jig runtime: owns the UIKit renderer and the JS runtime, keeps the
+/// runtime's viewport, keyboard and appearance in sync, and starts the shell, whose list of
+/// apps the bundled demo specs seed.
 final class HostViewController: UIViewController {
-    private struct BundledApp {
-        let id: String
-        let name: String
-        let json: String
-    }
-
     private var renderer: UIKitRenderer!
     private var runtime: JigRuntime!
-    private var apps: [BundledApp] = []
     private var lastViewport: (CGSize, UIEdgeInsets)?
     private var keyboardOverlap: CGFloat = 0
-    private let menuButton = UIButton(type: .system)
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -23,9 +15,6 @@ final class HostViewController: UIViewController {
         renderer = UIKitRenderer(surface: view)
         runtime = JigRuntime(renderer: renderer)
         runtime.onTheme = { [weak self] theme in self?.apply(theme) }
-        apps = Self.loadBundledApps()
-
-        setUpMenuButton()
         setUpBackSwipe()
         NotificationCenter.default.addObserver(
             self, selector: #selector(keyboardWillChangeFrame(_:)),
@@ -38,8 +27,8 @@ final class HostViewController: UIViewController {
             self.runtime.setColorScheme(dark: self.traitCollection.userInterfaceStyle == .dark)
         }
 
-        let lastId = UserDefaults.standard.string(forKey: "jig.lastApp")
-        if let app = apps.first(where: { $0.id == lastId }) ?? apps.first { open(app) }
+        let (shell, seeds) = Self.bundledSpecs()
+        runtime.boot(shellJSON: shell, seedsJSON: seeds)
     }
 
     override func viewDidLayoutSubviews() {
@@ -61,15 +50,6 @@ final class HostViewController: UIViewController {
         renderer.isDark = theme.isDark
         if let accent = theme.colors["accent"].flatMap(UIColor.init(hex:)) { renderer.accentColor = accent }
         if let background = theme.colors["background"].flatMap(UIColor.init(hex:)) { view.backgroundColor = background }
-    }
-
-    private func open(_ app: BundledApp) {
-        runtime.load(specJSON: app.json)
-        UserDefaults.standard.set(app.id, forKey: "jig.lastApp")
-        menuButton.menu = UIMenu(title: "Apps", children: apps.map { a in
-            UIAction(title: a.name, state: a.id == app.id ? .on : .off) { [weak self] _ in self?.open(a) }
-        })
-        view.bringSubviewToFront(menuButton)
     }
 
     // MARK: - Keyboard
@@ -104,7 +84,7 @@ final class HostViewController: UIViewController {
             let commit = gesture.state == .ended && (dx > width * 0.3 || gesture.velocity(in: view).x > 500)
             if swipingBack {
                 renderer.endInteractiveBack(commit: commit) { [weak self] in self?.runtime.goBack() }
-            } else if commit, renderer.navDepth > 1 {
+            } else if commit, renderer.canGoBack {
                 runtime.goBack()
             }
             swipingBack = false
@@ -113,34 +93,23 @@ final class HostViewController: UIViewController {
         }
     }
 
-    // MARK: - App switcher
+    // MARK: - Specs
 
-    private func setUpMenuButton() {
-        menuButton.setImage(UIImage(systemName: "square.grid.2x2"), for: .normal)
-        menuButton.tintColor = .secondaryLabel
-        menuButton.showsMenuAsPrimaryAction = true
-        menuButton.accessibilityLabel = "Switch app"
-        menuButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(menuButton)
-        NSLayoutConstraint.activate([
-            menuButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
-            menuButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-            menuButton.widthAnchor.constraint(equalToConstant: 44),
-            menuButton.heightAnchor.constraint(equalToConstant: 44),
-        ])
-    }
-
-    private static func loadBundledApps() -> [BundledApp] {
-        let urls = Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? []
-        return urls.compactMap { url -> BundledApp? in
+    /// `shell.json`, and every other bundled spec (as a JSON array) for the shell's app list.
+    private static func bundledSpecs() -> (shell: String, seeds: String) {
+        guard let shellURL = Bundle.main.url(forResource: "shell", withExtension: "json"),
+              let shell = try? String(contentsOf: shellURL, encoding: .utf8)
+        else { fatalError("shell.json is missing from the app bundle. Run `npm run build:native` in the repo root.") }
+        let urls = (Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? [])
+            .filter { $0.lastPathComponent != "shell.json" }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let seeds = urls.compactMap { url -> String? in
             guard let data = try? Data(contentsOf: url),
                   let spec = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  spec["screens"] != nil,
-                  let id = spec["id"] as? String,
-                  let json = String(data: data, encoding: .utf8)
+                  spec["screens"] != nil
             else { return nil }
-            return BundledApp(id: id, name: spec["name"] as? String ?? id, json: json)
+            return String(data: data, encoding: .utf8)
         }
-        .sorted { $0.name < $1.name }
+        return (shell, "[" + seeds.joined(separator: ",") + "]")
     }
 }

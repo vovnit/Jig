@@ -88,6 +88,8 @@ export class ViewNode {
   intrinsic: Size | null = null;
   /** Set on a list's body: its children are a window of rows over all items. */
   virtual: VirtualRows | null = null;
+  /** Where the node is in the app's spec (`screens.main.body.children[1]`), for selecting it. */
+  path: string | null = null;
 
   constructor(type: string) {
     this.type = type;
@@ -197,7 +199,7 @@ export interface LayoutContext {
   stats: { measured: number; cacheHits: number; skipped: number };
 }
 
-const CONTAINERS = new Set(["root", "screen", "column", "row", "overlay", "stack", "scroll", "hscroll"]);
+const CONTAINERS = new Set(["root", "screen", "column", "row", "overlay", "stack", "scroll", "hscroll", "canvas"]);
 export const isContainer = (type: string) => CONTAINERS.has(type);
 const isRowType = (type: string) => type === "row" || type === "hscroll";
 
@@ -263,6 +265,8 @@ export function layoutNode(
 
   const size = node.virtual
     ? layoutVirtual(node, w, wExact, h, hExact, perform, ctx)
+    : node.type === "canvas"
+    ? layoutCanvas(node, w, wExact, h, hExact, perform, ctx)
     : isContainer(node.type)
     ? node.type === "overlay" || node.type === "stack"
       ? layoutOverlay(node, w, wExact, h, hExact, perform, ctx)
@@ -361,7 +365,8 @@ function layoutFlex(
       cross = Math.max(0, crossAvail - mCross);
       cExact = false;
     }
-    const fixedMain = resolve(row ? cb.width : cb.height, mainAvail);
+    // Percentages in a scroll view are of its visible size: an hscroll's pages are "100%" wide.
+    const fixedMain = resolve(row ? cb.width : cb.height, scrolls ? (row ? innerW : innerH) : mainAvail);
     let basis: number;
     if (fixedMain !== undefined) {
       basis = clamp(fixedMain, row ? cb.minWidth : cb.minHeight, row ? cb.maxWidth : cb.maxHeight);
@@ -558,6 +563,36 @@ function layoutVirtual(
     }
     layoutAbsolute(node, width, height, ctx);
   }
+  return { width, height };
+}
+
+/**
+ * A whiteboard: a 2D scroll view whose children are placed by `left` / `top` (they are all
+ * positioned absolutely). Its content is the box around them, plus padding.
+ */
+function layoutCanvas(
+  node: ViewNode,
+  w: number, wExact: boolean,
+  h: number, hExact: boolean,
+  perform: boolean,
+  ctx: LayoutContext,
+): Size {
+  const b = node.box;
+  const [pt, pr, pb, pl] = b.padding;
+  const width = wExact ? w : isFinite(w) ? w : 0;
+  const height = hExact ? h : isFinite(h) ? h : 0;
+  let right = 0;
+  let bottom = 0;
+  for (const c of node.children) {
+    const cb = c.box;
+    const s = layoutNode(c, resolve(cb.width, width) ?? Infinity, cb.width !== undefined, resolve(cb.height, height) ?? Infinity, cb.height !== undefined, perform, ctx);
+    const x = pl + (cb.left ?? 0);
+    const y = pt + (cb.top ?? 0);
+    right = Math.max(right, x + s.width);
+    bottom = Math.max(bottom, y + s.height);
+    if (perform) setFrame(c, round(x), round(y), round(s.width), round(s.height), ctx);
+  }
+  node.contentSize = { width: Math.max(width, right + pr), height: Math.max(height, bottom + pb) };
   return { width, height };
 }
 

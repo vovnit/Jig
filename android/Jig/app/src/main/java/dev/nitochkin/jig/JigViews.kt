@@ -40,6 +40,17 @@ class JigLayout(context: Context) : ViewGroup(context) {
     var contentHeight = 0
     /** Set on list rows: swipe actions and drag-to-reorder. */
     var rowGestures: RowGestures? = null
+    /** A whiteboard card's app: a picture, so touches go to the card around it. */
+    var blocksTouches = false
+    /** The builder's select mode: a tap picks the view under it (in this layout's coordinates). */
+    var onSelectTap: ((Float, Float) -> Unit)? = null
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (blocksTouches) return false
+        val select = onSelectTap ?: return super.dispatchTouchEvent(ev)
+        if (ev.actionMasked == MotionEvent.ACTION_UP) select(ev.x, ev.y)
+        return true
+    }
 
     override fun onInterceptTouchEvent(ev: MotionEvent) = rowGestures?.intercept(this, ev) ?: false
 
@@ -115,6 +126,11 @@ class JigScrollView(context: Context) : ScrollView(context) {
 
 class JigHScrollView(context: Context) : HorizontalScrollView(context) {
     val content = JigLayout(context)
+    /** Paging (the builder's screen pager): a swipe settles on a page and reports it. */
+    var paging = false
+    var onPage: ((Int) -> Unit)? = null
+    private var downX = 0f
+    private var page = 0
 
     init {
         addView(content, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.MATCH_PARENT))
@@ -125,6 +141,135 @@ class JigHScrollView(context: Context) : HorizontalScrollView(context) {
         content.contentWidth = width
         content.contentHeight = height
         content.requestLayout()
+    }
+
+    fun show(page: Int, animated: Boolean) {
+        this.page = page
+        val x = page * width
+        if (width == 0 || scrollX == x) return
+        if (animated) smoothScrollTo(x, 0) else scrollTo(x, 0)
+    }
+
+    override fun onLayout(changed: Boolean, l: Int, t: Int, r: Int, b: Int) {
+        super.onLayout(changed, l, t, r, b)
+        if (paging && width > 0 && scrollX != page * width) scrollTo(page * width, 0)
+    }
+
+    override fun fling(velocityX: Int) {
+        if (!paging) super.fling(velocityX)
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) downX = ev.x
+        return super.onInterceptTouchEvent(ev)
+    }
+
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN) downX = ev.x
+        val handled = super.onTouchEvent(ev)
+        if (paging && width > 0 && (ev.actionMasked == MotionEvent.ACTION_UP || ev.actionMasked == MotionEvent.ACTION_CANCEL)) {
+            // A swipe of a fifth of the width turns the page; less springs back.
+            val dx = downX - ev.x
+            val pages = maxOf(1, (content.width + width - 1) / width)
+            val next = when {
+                dx > width / 5f -> page + 1
+                dx < -width / 5f -> page - 1
+                else -> page
+            }.coerceIn(0, pages - 1)
+            show(next, true)
+            onPage?.invoke(next)
+        }
+        return handled
+    }
+}
+
+/**
+ * The builder's whiteboard: a 2D scroll view that pans with one finger and zooms with two.
+ * Children are positioned by the runtime inside [content], which scales from its top left.
+ */
+class JigCanvasView(context: Context) : FrameLayout(context) {
+    val content = JigLayout(context)
+    private var zoom = 1f
+    private val scroller = android.widget.OverScroller(context)
+    private val slop = android.view.ViewConfiguration.get(context).scaledTouchSlop
+    private var downX = 0f
+    private var downY = 0f
+    private var dragging = false
+
+    private val scale = android.view.ScaleGestureDetector(context, object : android.view.ScaleGestureDetector.SimpleOnScaleGestureListener() {
+        override fun onScale(d: android.view.ScaleGestureDetector): Boolean {
+            val next = (zoom * d.scaleFactor).coerceIn(0.3f, 2.5f)
+            // Keep the point between the fingers where it is.
+            val px = (scrollX + d.focusX) / zoom
+            val py = (scrollY + d.focusY) / zoom
+            zoom = next
+            content.scaleX = zoom
+            content.scaleY = zoom
+            scrollTo((px * zoom - d.focusX).toInt(), (py * zoom - d.focusY).toInt())
+            return true
+        }
+    })
+
+    private val gestures = android.view.GestureDetector(context, object : android.view.GestureDetector.SimpleOnGestureListener() {
+        override fun onScroll(e1: MotionEvent?, e2: MotionEvent, dx: Float, dy: Float): Boolean {
+            scrollBy(dx.toInt(), dy.toInt())
+            return true
+        }
+
+        override fun onFling(e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float): Boolean {
+            scroller.fling(scrollX, scrollY, -vx.toInt(), -vy.toInt(), 0, maxX(), 0, maxY())
+            postInvalidateOnAnimation()
+            return true
+        }
+    })
+
+    init {
+        addView(content, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
+        content.pivotX = 0f
+        content.pivotY = 0f
+    }
+
+    fun setContentSize(width: Int, height: Int) {
+        content.contentWidth = width
+        content.contentHeight = height
+        content.requestLayout()
+    }
+
+    private fun maxX() = maxOf(0, (content.contentWidth * zoom).toInt() - width)
+    private fun maxY() = maxOf(0, (content.contentHeight * zoom).toInt() - height)
+
+    override fun scrollTo(x: Int, y: Int) = super.scrollTo(x.coerceIn(0, maxX()), y.coerceIn(0, maxY()))
+
+    override fun computeScroll() {
+        if (scroller.computeScrollOffset()) {
+            scrollTo(scroller.currX, scroller.currY)
+            postInvalidateOnAnimation()
+        }
+    }
+
+    /** Taps go to the cards; a drag or a pinch is the canvas's. */
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = ev.x
+                downY = ev.y
+                dragging = false
+                scroller.forceFinished(true)
+                gestures.onTouchEvent(ev)
+                scale.onTouchEvent(ev)
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> dragging = true
+            MotionEvent.ACTION_MOVE -> if (kotlin.math.abs(ev.x - downX) > slop || kotlin.math.abs(ev.y - downY) > slop) dragging = true
+        }
+        if (dragging) parent?.requestDisallowInterceptTouchEvent(true)
+        return dragging
+    }
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        scale.onTouchEvent(ev)
+        if (!scale.isInProgress) gestures.onTouchEvent(ev)
+        return true
     }
 }
 
@@ -167,17 +312,19 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
     private var fontWeight = 400
     private var lineHeight = 22.0
     private var align = Layout.Alignment.ALIGN_NORMAL
+    private var mono = false
 
     init {
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
     }
 
-    fun setStyle(fontSize: Double, fontWeight: Int, lineHeight: Double, color: Int, align: Layout.Alignment) {
-        if (this.fontSize != fontSize || this.fontWeight != fontWeight || this.lineHeight != lineHeight || this.align != align) {
+    fun setStyle(fontSize: Double, fontWeight: Int, lineHeight: Double, color: Int, align: Layout.Alignment, mono: Boolean = false) {
+        if (this.fontSize != fontSize || this.fontWeight != fontWeight || this.lineHeight != lineHeight || this.align != align || this.mono != mono) {
             this.fontSize = fontSize
             this.fontWeight = fontWeight
             this.lineHeight = lineHeight
             this.align = align
+            this.mono = mono
             invalidateLayout()
         }
         if (paint.color != color) {
@@ -207,7 +354,7 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
             return
         }
         val l = layout ?: run {
-            TextStyle.configure(paint, fontSize, fontWeight, d)
+            TextStyle.configure(paint, fontSize, fontWeight, d, mono)
             TextStyle.layout(text, paint, (lineHeight * d).roundToInt(), width, align).also { layout = it }
         }
         val color = paint.color

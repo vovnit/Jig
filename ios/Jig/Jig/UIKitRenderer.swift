@@ -32,15 +32,18 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     /// Removed views still fading out: they stay on screen but no longer count as children.
     private var leaving = Set<UIView>()
 
-    /// The runtime's navigation depth, reported with every batch.
-    private(set) var navDepth = 1
-    /// What each screen below the current one looked like when it was left (taken on push),
-    /// shown under the current screen during an interactive back swipe.
-    private var screenSnapshots: [UIView?] = []
+    /// Screen stacks, one per runtime root (the shell, or an app running inside it): the
+    /// navigation depth, and what each screen below the current one looked like when it was
+    /// left (taken on push), shown under the current screen during an interactive back swipe.
+    private var depths: [Int: Int] = [:]
+    private var screenSnapshots: [Int: [UIView?]] = [:]
     private var screensAnimating = false
-    private var interactiveBack: (snapshot: UIView, dim: UIView)?
-    /// Set once a back swipe committed: the pop it causes is already on screen.
-    private var awaitingInteractivePop = false
+    private var interactiveBack: (target: Int, snapshot: UIView, dim: UIView)?
+    /// Set once a back swipe committed: the pop it causes (on this root) is already on screen.
+    private var awaitingInteractivePop: Int?
+
+    /// Whether any screen stack on screen can pop.
+    var canGoBack: Bool { backTarget() != nil }
 
     init(surface: UIView) {
         self.surface = surface
@@ -56,17 +59,19 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: - Ops
 
-    func apply(json: String, navDepth: Int = 1) {
+    func apply(json: String) {
         guard let data = json.data(using: .utf8),
               let ops = (try? JSONSerialization.jsonObject(with: data)) as? [[Any]]
         else { return }
-        // A screen transition: keep a picture of the old screen to animate away from.
+        // A screen transition: keep a picture of the old screen to animate away from. The
+        // command names the root of the runtime that navigated.
         let screenTransition = ops.first { $0.count >= 4 && ($0[0] as? String) == "command" && ($0[2] as? String) == "transition" }
-        let interactivePop = awaitingInteractivePop && screenTransition != nil
+        let target = screenTransition.flatMap { int($0[1]) }
+        let interactivePop = target != nil && awaitingInteractivePop == target
         var snapshot: UIView?
-        if screenTransition != nil, !interactivePop, let root = nodes[1]?.view, root.window != nil {
+        if let target, !interactivePop, let root = nodes[target]?.view, root.window != nil {
             snapshot = root.snapshotView(afterScreenUpdates: false)
-            snapshot?.frame = root.frame
+            snapshot?.frame = frame(of: root)
         }
         createdNow.removeAll()
         for op in ops {
@@ -98,9 +103,11 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                     place(node.view, f)
                 }
                 rows.framed(id)
+                if let page = pendingPages.removeValue(forKey: id) { (node.view as? JigScrollView)?.show(page: page, animated: false) }
             case "command":
                 guard op.count >= 3, let id = int(op[1]), let name = op[2] as? String else { continue }
                 if name == "focus" { nodes[id]?.view.becomeFirstResponder() }
+                if name == "depth", let args = op[3] as? [Any], let depth = args.first.flatMap(int) { depths[id] = depth }
             default:
                 continue
             }
@@ -109,33 +116,48 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         let kind = args.first as? String
         if interactivePop {
             finishInteractivePop()
-        } else if let snapshot, let root = nodes[1]?.view, args.count >= 3 {
+        } else if let snapshot, let target, let root = nodes[target]?.view, args.count >= 3 {
             animateScreens(kind: kind ?? "push", style: args[1] as? String ?? "slide",
                            duration: double(args[2]) / 1000, root: root, snapshot: snapshot)
         }
         // Keep one snapshot per screen below the current one, for interactive back.
-        if navDepth > self.navDepth, kind == "push" { screenSnapshots.append(snapshot) }
-        while screenSnapshots.count < navDepth - 1 { screenSnapshots.append(nil) }
-        while screenSnapshots.count > max(0, navDepth - 1) { screenSnapshots.removeLast() }
-        self.navDepth = navDepth
+        if let target, kind == "push" { screenSnapshots[target, default: []].append(snapshot) }
+        for (id, depth) in depths {
+            var stack = screenSnapshots[id] ?? []
+            while stack.count < depth - 1 { stack.append(nil) }
+            while stack.count > max(0, depth - 1) { stack.removeLast() }
+            screenSnapshots[id] = stack
+        }
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         revealFocusedField()
     }
 
-    /// Sets a frame; a swiped or dragged row has a transform, which leaves `frame` undefined.
+    /// Sets a frame. A swiped or dragged row, or a scaled app, has a transform, which leaves
+    /// `frame` undefined: place it by its bounds and anchor point instead.
     private func place(_ view: UIView, _ f: CGRect) {
         if view.transform.isIdentity {
             view.frame = f
         } else {
             view.bounds.size = f.size
-            view.center = CGPoint(x: f.midX, y: f.midY)
+            let a = view.layer.anchorPoint
+            view.layer.position = CGPoint(x: f.minX + a.x * f.width, y: f.minY + a.y * f.height)
         }
     }
 
     private func frame(of view: UIView) -> CGRect {
         if view.transform.isIdentity { return view.frame }
         let size = view.bounds.size
-        return CGRect(x: view.center.x - size.width / 2, y: view.center.y - size.height / 2, width: size.width, height: size.height)
+        let a = view.layer.anchorPoint
+        let p = view.layer.position
+        return CGRect(x: p.x - a.x * size.width, y: p.y - a.y * size.height, width: size.width, height: size.height)
+    }
+
+    /// An embedded app's root, drawn at its `app` node's scale from the top left.
+    private func applyScale(_ view: UIView, _ scale: CGFloat) {
+        let f = frame(of: view)
+        view.layer.anchorPoint = .zero
+        view.transform = scale == 1 ? .identity : CGAffineTransform(scaleX: scale, y: scale)
+        place(view, f)
     }
 
     // MARK: - Transitions
@@ -203,11 +225,13 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             UIView.animate(withDuration: duration, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0,
                            options: [.allowUserInteraction], animations: changes, completion: finish)
         }
+        // The screens move inside the navigating root's parent: the surface, or an `app` node.
+        let container = root.superview ?? surface
         if style == "fade" || UIAccessibility.isReduceMotionEnabled {
-            surface.insertSubview(snapshot, aboveSubview: root)
+            container.insertSubview(snapshot, aboveSubview: root)
             UIView.animate(withDuration: duration * 0.8, animations: { snapshot.alpha = 0 }, completion: finish)
         } else if kind == "push" {
-            surface.insertSubview(snapshot, belowSubview: root)
+            container.insertSubview(snapshot, belowSubview: root)
             snapshot.addSubview(dim)
             root.transform = CGAffineTransform(translationX: width, y: 0)
             slide {
@@ -216,7 +240,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 dim.alpha = 0.12
             }
         } else {
-            surface.insertSubview(snapshot, aboveSubview: root)
+            container.insertSubview(snapshot, aboveSubview: root)
             dim.frame = root.bounds
             dim.alpha = 0.12
             root.addSubview(dim)
@@ -234,26 +258,42 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     /// Starts a back swipe: the previous screen's snapshot appears under the current one.
     /// Returns false when there is nothing to swipe back to, or no picture of it.
     func beginInteractiveBack() -> Bool {
-        guard navDepth > 1, !screensAnimating, interactiveBack == nil, !awaitingInteractivePop,
-              let root = nodes[1]?.view, let snapshot = screenSnapshots.last ?? nil
+        guard !screensAnimating, interactiveBack == nil, awaitingInteractivePop == nil,
+              let target = backTarget(), let root = nodes[target]?.view, let snapshot = screenSnapshots[target]?.last ?? nil
         else { return false }
         surface.endEditing(true)
-        snapshot.frame = root.frame
+        snapshot.frame = frame(of: root)
         snapshot.transform = CGAffineTransform(translationX: -root.bounds.width * 0.3, y: 0)
         let dim = UIView(frame: snapshot.bounds)
         dim.backgroundColor = .black
         dim.alpha = 0.12
         dim.isUserInteractionEnabled = false
         snapshot.addSubview(dim)
-        surface.insertSubview(snapshot, belowSubview: root)
+        (root.superview ?? surface).insertSubview(snapshot, belowSubview: root)
         root.backgroundColor = surface.backgroundColor
-        interactiveBack = (snapshot, dim)
+        interactiveBack = (target, snapshot, dim)
         return true
+    }
+
+    /// The innermost screen stack on screen that can pop: an app inside the shell before the shell.
+    private func backTarget() -> Int? {
+        var best: (id: Int, level: Int)?
+        for (id, depth) in depths where depth > 1 {
+            guard let view = nodes[id]?.view, view.window != nil else { continue }
+            var level = 0
+            var v = view.superview
+            while let current = v {
+                level += 1
+                v = current.superview
+            }
+            if best == nil || level > best!.level { best = (id, level) }
+        }
+        return best?.id
     }
 
     /// Follows the finger: 0 is where the swipe started, 1 is the screen fully off to the right.
     func updateInteractiveBack(progress: CGFloat) {
-        guard let (snapshot, dim) = interactiveBack, let root = nodes[1]?.view else { return }
+        guard let (target, snapshot, dim) = interactiveBack, let root = nodes[target]?.view else { return }
         let p = min(1, max(0, progress))
         let width = root.bounds.width
         root.transform = CGAffineTransform(translationX: width * p, y: 0)
@@ -264,12 +304,12 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     /// Finishes the swipe. On commit, `pop` runs once the screen is off; the runtime's pop
     /// then swaps in the real previous screen exactly where its snapshot is.
     func endInteractiveBack(commit: Bool, pop: @escaping () -> Void) {
-        guard let (snapshot, dim) = interactiveBack, let root = nodes[1]?.view else { return }
+        guard let (target, snapshot, dim) = interactiveBack, let root = nodes[target]?.view else { return }
         UIView.animate(withDuration: 0.25, delay: 0, usingSpringWithDamping: 1, initialSpringVelocity: 0, options: [.beginFromCurrentState]) {
             self.updateInteractiveBack(progress: commit ? 1 : 0)
         } completion: { _ in
             if commit {
-                self.awaitingInteractivePop = true
+                self.awaitingInteractivePop = target
                 pop()
             } else {
                 snapshot.removeFromSuperview()
@@ -282,14 +322,14 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func finishInteractivePop() {
-        guard let (snapshot, dim) = interactiveBack else { return }
-        nodes[1]?.view.transform = .identity
-        nodes[1]?.view.backgroundColor = .clear
+        guard let (target, snapshot, dim) = interactiveBack else { return }
+        nodes[target]?.view.transform = .identity
+        nodes[target]?.view.backgroundColor = .clear
         snapshot.removeFromSuperview()
         dim.removeFromSuperview()
         snapshot.transform = .identity
         interactiveBack = nil
-        awaitingInteractivePop = false
+        awaitingInteractivePop = nil
     }
 
     func revealFocusedField(animated: Bool = true) {
@@ -341,6 +381,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         let siblings = live.filter { $0 !== c.view }
         c.view.removeFromSuperview()
         if index < siblings.count { container.insertSubview(c.view, belowSubview: siblings[index]) } else { container.addSubview(c.view) }
+        if let scale = cgFloat(p.props["contentScale"]), scale != 1 { applyScale(c.view, scale) }
+        if let catcher = selectCatchers[parent] { container.bringSubviewToFront(catcher) }
         // A node with a value transition fades in when it appears in an existing list.
         if animated, createdNow.contains(child), !createdNow.contains(parent), let t = transition(c) {
             let target = c.view.alpha
@@ -371,6 +413,11 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         if view.tag > 0, nodes[view.tag]?.view === view {
             nodes.removeValue(forKey: view.tag)
             rows.forget(view.tag)
+            depths.removeValue(forKey: view.tag)
+            screenSnapshots.removeValue(forKey: view.tag)
+            selectCatchers.removeValue(forKey: view.tag)
+            selectionViews.removeValue(forKey: view.tag)
+            pendingPages.removeValue(forKey: view.tag)
         }
         for sub in view.subviews { forget(sub) }
     }
@@ -415,11 +462,15 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             v.contentMode = .scaleAspectFill
             v.clipsToBounds = true
             return v
-        case "scroll", "hscroll":
+        case "scroll", "hscroll", "canvas":
             let s = JigScrollView()
             if type == "hscroll" {
                 s.alwaysBounceVertical = false
                 s.alwaysBounceHorizontal = true
+            }
+            if type == "canvas" {
+                s.alwaysBounceHorizontal = true
+                s.zoomable = true
             }
             return s
         default:
@@ -490,8 +541,18 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         case "image":
             guard let imageView = view as? UIImageView else { return }
             loadImage(string(p["src"]), into: imageView, id: view.tag)
-        case "scroll", "hscroll":
+        case "scroll", "hscroll", "canvas":
             guard let scroll = view as? JigScrollView else { return }
+            // A paging hscroll (the builder's screen pager) reports the page it settles on.
+            scroll.isPagingEnabled = p["paging"] as? Bool == true
+            if scroll.isPagingEnabled, scroll.onPage == nil {
+                let id = view.tag
+                scroll.onPage = { [weak self] page in self?.dispatch?(id, "page", ["index": page]) }
+            }
+            if let page = p["page"].flatMap(int) {
+                // Before its first frame the scroll view has no width to page by: wait for it.
+                if scroll.bounds.width > 0 { scroll.show(page: page, animated: true) } else { pendingPages[view.tag] = page }
+            }
             // A long list inside needs the offset to know which rows to build.
             if p["reportScroll"] as? Bool == true, scroll.onScroll == nil {
                 let id = view.tag
@@ -501,11 +562,18 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 }
             }
             guard let size = p["contentSize"] as? [Any], size.count == 2 else { break }
-            let content = CGSize(width: double(size[0]), height: double(size[1]))
-            if scroll.contentSize != content { scroll.setContentSize(content) }
+            scroll.setContentSize(CGSize(width: double(size[0]), height: double(size[1])))
         default:
             break
         }
+        if node.type == "app" {
+            // A whiteboard card is a picture of the app: touches go to the card.
+            view.isUserInteractionEnabled = p["interactive"] as? Bool != false
+            let scale = cgFloat(p["contentScale"]) ?? 1
+            for sub in view.subviews where sub.tag > 0 && sub.transform.a != scale { applyScale(sub, scale) }
+            setSelecting(view, p["selecting"] as? Bool == true)
+        }
+        setSelected(view, p["selected"] as? Bool == true)
         if let list = p["swipeActions"] as? [[String: Any]] {
             rows.setActions(id: view.tag, view: view, actions: list.map {
                 RowGestures.SwipeAction(label: string($0["label"]), color: color($0["color"]) ?? .systemRed)
@@ -539,6 +607,79 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             view.layer.shadowOpacity = 0
         }
 
+    }
+
+    // MARK: - Screenshots (the builder)
+
+    /// A PNG of a node's view at its own size, one pixel per point (an app in a scaled card is drawn unscaled).
+    func snapshot(id: Int) -> Data? {
+        guard let view = nodes[id]?.view, view.bounds.width > 0, view.bounds.height > 0 else { return nil }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: view.bounds.size, format: format).image { context in
+            (surface.backgroundColor ?? .white).setFill()
+            context.fill(CGRect(origin: .zero, size: view.bounds.size))
+            view.layer.render(in: context.cgContext)
+        }
+        return image.pngData()
+    }
+
+    // MARK: - Select mode (the builder)
+
+    private var pendingPages: [Int: Int] = [:]
+    private var selectCatchers: [Int: UIView] = [:]
+    private var selectionViews: [Int: UIView] = [:]
+
+    /// In select mode a tap inside an app picks the part under it instead of using it: a
+    /// transparent view on top takes the touches and reports the deepest node there.
+    private func setSelecting(_ appView: UIView, _ on: Bool) {
+        let id = appView.tag
+        if !on {
+            selectCatchers.removeValue(forKey: id)?.removeFromSuperview()
+            return
+        }
+        guard selectCatchers[id] == nil else { return }
+        let catcher = UIView(frame: appView.bounds)
+        catcher.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        catcher.backgroundColor = .clear
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleSelectTap(_:)))
+        catcher.addGestureRecognizer(tap)
+        appView.addSubview(catcher)
+        selectCatchers[id] = catcher
+    }
+
+    @objc private func handleSelectTap(_ gesture: UITapGestureRecognizer) {
+        guard let catcher = gesture.view, let appView = catcher.superview else { return }
+        catcher.isHidden = true
+        defer { catcher.isHidden = false }
+        let point = gesture.location(in: appView)
+        var hit = appView.hitTest(point, with: nil)
+        while let v = hit, v !== appView {
+            if v.tag > 0, nodes[v.tag]?.view === v {
+                UISelectionFeedbackGenerator().selectionChanged()
+                dispatch?(v.tag, "select", [:])
+                return
+            }
+            hit = v.superview
+        }
+    }
+
+    /// The selected node's outline, in the accent color, inside its bounds so a clipping view shows it too.
+    private func setSelected(_ view: UIView, _ on: Bool) {
+        let id = view.tag
+        if !on {
+            selectionViews.removeValue(forKey: id)?.removeFromSuperview()
+            return
+        }
+        let outline = selectionViews[id] ?? UIView()
+        outline.frame = view.bounds
+        outline.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        outline.isUserInteractionEnabled = false
+        outline.layer.borderWidth = 2
+        outline.layer.borderColor = accentColor.cgColor
+        outline.layer.cornerRadius = max(view.layer.cornerRadius, 4)
+        if outline.superview == nil { view.addSubview(outline) }
+        selectionViews[id] = outline
     }
 
     // MARK: - Events
@@ -618,6 +759,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             size: double(s["fontSize"] ?? 17),
             weight: double(s["fontWeight"] ?? 400),
             lineHeight: double(s["lineHeight"] ?? 22),
+            mono: s["fontFamily"] as? String == "mono",
             color: color(s["color"]) ?? .black,
             align: align
         )

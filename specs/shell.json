@@ -1,0 +1,817 @@
+{
+  "id": "jig.shell",
+  "name": "Jig",
+  "description": "The container: your apps, and the builder that makes and changes them.",
+  "data": {
+    "apps": {
+      "type": "list",
+      "default": []
+    },
+    "apiKey": {
+      "type": "string",
+      "secret": true,
+      "description": "Meta Model API key"
+    },
+    "model": {
+      "type": "string",
+      "default": "muse-spark-1.1"
+    },
+    "baseUrl": {
+      "type": "string",
+      "default": "https://api.meta.ai/v1"
+    }
+  },
+  "state": {
+    "log": [],
+    "busy": false,
+    "prompt": "",
+    "newPrompt": "",
+    "newId": "",
+    "selected": null,
+    "mode": "board",
+    "focus": "",
+    "selecting": false,
+    "recording": false
+  },
+  "start": "home",
+  "screens": {
+    "home": {
+      "title": "Apps",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 16
+        },
+        "children": [
+          {
+            "type": "list",
+            "items": "apps",
+            "as": "app",
+            "reorder": true,
+            "empty": "No apps yet.",
+            "footer": "Tap an app to open it. Swipe to change or delete it, hold to reorder.",
+            "onTap": {
+              "navigate": "run",
+              "params": {
+                "id": "app.id"
+              }
+            },
+            "swipe": [
+              {
+                "label": "Delete",
+                "do": {
+                  "remove": "app"
+                }
+              },
+              {
+                "label": "Change",
+                "color": "accent",
+                "do": [
+                  {
+                    "call": "builder.clear"
+                  },
+                  {
+                    "set": "mode",
+                    "to": "'board'"
+                  },
+                  {
+                    "set": "focus",
+                    "to": "''"
+                  },
+                  {
+                    "set": "selecting",
+                    "to": "false"
+                  },
+                  {
+                    "set": "selected",
+                    "to": "null"
+                  },
+                  {
+                    "navigate": "edit",
+                    "params": {
+                      "id": "app.id"
+                    }
+                  }
+                ]
+              }
+            ],
+            "row": {
+              "type": "row",
+              "style": {
+                "gap": 12,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "type": "overlay",
+                  "style": {
+                    "width": 40,
+                    "height": 40,
+                    "radius": 10,
+                    "background": "{{app.spec.theme.accent ?? 'accent'}}"
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "variant": "headline",
+                      "value": "{{upper(slice(app.spec.name, 0, 1))}}",
+                      "style": {
+                        "color": "onAccent"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "column",
+                  "style": {
+                    "grow": 1,
+                    "gap": 2
+                  },
+                  "children": [
+                    {
+                      "type": "text",
+                      "variant": "headline",
+                      "value": "{{app.spec.name}}"
+                    },
+                    {
+                      "type": "text",
+                      "variant": "caption",
+                      "if": "app.spec.description",
+                      "value": "{{app.spec.description}}"
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "button",
+            "label": "New app",
+            "onTap": {
+              "navigate": "new"
+            }
+          },
+          {
+            "type": "button",
+            "variant": "plain",
+            "label": "Settings",
+            "style": {
+              "alignSelf": "center"
+            },
+            "onTap": {
+              "navigate": "settings"
+            }
+          }
+        ]
+      }
+    },
+    "run": {
+      "scroll": false,
+      "header": false,
+      "body": {
+        "type": "overlay",
+        "style": {
+          "align": "stretch"
+        },
+        "children": [
+          {
+            "type": "app",
+            "spec": "{{find(apps, a => a.id == params.id).spec}}",
+            "style": {
+              "width": "100%",
+              "height": "100%"
+            }
+          },
+          {
+            "type": "row",
+            "style": {
+              "position": "absolute",
+              "top": 6,
+              "right": 16,
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Change",
+                "style": {
+                  "paddingX": 14,
+                  "paddingY": 7,
+                  "radius": 16,
+                  "fontSize": 15
+                },
+                "onTap": [
+                  {
+                    "call": "builder.clear"
+                  },
+                  {
+                    "set": "mode",
+                    "to": "'board'"
+                  },
+                  {
+                    "set": "focus",
+                    "to": "''"
+                  },
+                  {
+                    "set": "selecting",
+                    "to": "false"
+                  },
+                  {
+                    "set": "selected",
+                    "to": "null"
+                  },
+                  {
+                    "navigate": "edit",
+                    "params": {
+                      "id": "params.id"
+                    },
+                    "transition": "fade"
+                  }
+                ]
+              },
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Done",
+                "style": {
+                  "paddingX": 14,
+                  "paddingY": 7,
+                  "radius": 16,
+                  "fontSize": 15
+                },
+                "onTap": {
+                  "back": true
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "edit": {
+      "scroll": false,
+      "header": false,
+      "body": {
+        "type": "Editor",
+        "app": "{{find(apps, a => a.id == params.id)}}"
+      }
+    },
+    "new": {
+      "title": "New app",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 12
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "callout",
+            "value": "Say what you need, in a sentence or two. You can change anything afterwards.",
+            "style": {
+              "color": "muted"
+            }
+          },
+          {
+            "type": "textfield",
+            "placeholder": "A packing list for trips, with categories",
+            "bind": "newPrompt"
+          },
+          {
+            "type": "button",
+            "label": "Create",
+            "style": {
+              "opacity": "{{busy || trim(newPrompt) == '' ? 0.4 : 1}}"
+            },
+            "onTap": {
+              "if": "!busy && trim(newPrompt) != ''",
+              "then": [
+                {
+                  "call": "builder.create",
+                  "args": {
+                    "prompt": "newPrompt"
+                  }
+                },
+                {
+                  "navigate": "edit",
+                  "params": {
+                    "id": "newId"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "settings": {
+      "title": "Settings",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 8
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "Meta Model API key"
+          },
+          {
+            "type": "textfield",
+            "secure": true,
+            "placeholder": "Paste your key",
+            "bind": "apiKey"
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "{{apiKey ? 'Saved in secure storage on this device.' : 'Needed to create and change apps.'}}",
+            "style": {
+              "marginBottom": 8
+            }
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "Model"
+          },
+          {
+            "type": "textfield",
+            "placeholder": "muse-spark-1.1",
+            "bind": "model"
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "Editor": {
+      "type": "column",
+      "style": {
+        "grow": 1,
+        "background": "surface"
+      },
+      "children": [
+        {
+          "type": "row",
+          "style": {
+            "paddingX": 12,
+            "paddingY": 8,
+            "align": "center",
+            "gap": 8
+          },
+          "children": [
+            {
+              "type": "button",
+              "variant": "plain",
+              "label": "‹ Back",
+              "onTap": {
+                "back": true
+              }
+            },
+            {
+              "type": "text",
+              "variant": "headline",
+              "value": "{{props.app.spec.name}}",
+              "style": {
+                "grow": 1,
+                "textAlign": "center"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "plain",
+              "label": "Undo",
+              "style": {
+                "opacity": "{{len(props.app.history ?? []) > 0 ? 1 : 0.35}}"
+              },
+              "onTap": {
+                "call": "builder.undo",
+                "args": {
+                  "id": "props.app.id"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "type": "row",
+          "style": {
+            "justify": "center",
+            "gap": 4,
+            "paddingBottom": 6
+          },
+          "children": [
+            {
+              "type": "button",
+              "variant": "{{mode == 'board' ? 'primary' : 'plain'}}",
+              "label": "Board",
+              "style": {
+                "paddingX": 14,
+                "paddingY": 6,
+                "radius": 14,
+                "fontSize": 15
+              },
+              "onTap": {
+                "set": "mode",
+                "to": "'board'"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "{{mode == 'screen' ? 'primary' : 'plain'}}",
+              "label": "Screen",
+              "style": {
+                "paddingX": 14,
+                "paddingY": 6,
+                "radius": 14,
+                "fontSize": 15
+              },
+              "onTap": {
+                "set": "mode",
+                "to": "'screen'"
+              }
+            },
+            {
+              "type": "button",
+              "variant": "{{mode == 'code' ? 'primary' : 'plain'}}",
+              "label": "Code",
+              "style": {
+                "paddingX": 14,
+                "paddingY": 6,
+                "radius": 14,
+                "fontSize": 15
+              },
+              "onTap": {
+                "set": "mode",
+                "to": "'code'"
+              }
+            }
+          ]
+        },
+        {
+          "type": "overlay",
+          "style": {
+            "grow": 1,
+            "height": 0,
+            "align": "stretch"
+          },
+          "children": [
+            {
+              "type": "canvas",
+              "if": "mode == 'board'",
+              "style": {
+                "width": "100%",
+                "height": "100%"
+              },
+              "children": [
+                {
+                  "type": "shape",
+                  "path": "{{flow(props.app.spec).arrows}}",
+                  "viewBox": "{{'0 0 ' + flow(props.app.spec).width + ' ' + flow(props.app.spec).height}}",
+                  "fill": "none",
+                  "stroke": "muted",
+                  "strokeWidth": 2,
+                  "lineCap": "round",
+                  "style": {
+                    "position": "absolute",
+                    "left": 0,
+                    "top": 0,
+                    "width": "{{flow(props.app.spec).width}}",
+                    "height": "{{flow(props.app.spec).height}}"
+                  }
+                },
+                {
+                  "type": "column",
+                  "each": "flow(props.app.spec).cards",
+                  "as": "card",
+                  "key": "card.screen",
+                  "style": {
+                    "position": "absolute",
+                    "left": "{{card.x}}",
+                    "top": "{{card.y}}",
+                    "width": 156,
+                    "gap": 6
+                  },
+                  "onTap": [
+                    {
+                      "set": "focus",
+                      "to": "card.screen"
+                    },
+                    {
+                      "set": "mode",
+                      "to": "'screen'"
+                    }
+                  ],
+                  "children": [
+                    {
+                      "type": "text",
+                      "variant": "caption",
+                      "value": "{{card.title}}",
+                      "style": {
+                        "color": "{{card.screen == (focus || props.app.spec.start || first(keys(props.app.spec.screens))) ? 'accent' : 'muted'}}"
+                      }
+                    },
+                    {
+                      "type": "app",
+                      "spec": "{{props.app.spec}}",
+                      "screen": "{{card.screen}}",
+                      "scale": 0.4,
+                      "interactive": false,
+                      "style": {
+                        "width": 156,
+                        "height": 338,
+                        "radius": 14,
+                        "background": "background",
+                        "borderWidth": "{{card.screen == (focus || props.app.spec.start || first(keys(props.app.spec.screens))) ? 2 : 1}}",
+                        "borderColor": "{{card.screen == (focus || props.app.spec.start || first(keys(props.app.spec.screens))) ? 'accent' : 'border'}}"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "column",
+              "if": "mode == 'screen'",
+              "style": {
+                "width": "100%",
+                "height": "100%"
+              },
+              "children": [
+                {
+                  "type": "hscroll",
+                  "paging": true,
+                  "style": {
+                    "grow": 1
+                  },
+                  "page": "{{max(0, indexOf(keys(props.app.spec.screens), (focus || props.app.spec.start || first(keys(props.app.spec.screens)))))}}",
+                  "onPage": {
+                    "set": "focus",
+                    "to": "keys(props.app.spec.screens)[value]"
+                  },
+                  "children": [
+                    {
+                      "type": "column",
+                      "each": "keys(props.app.spec.screens)",
+                      "as": "screen",
+                      "key": "screen",
+                      "style": {
+                        "width": "100%",
+                        "align": "center",
+                        "gap": 6,
+                        "paddingTop": 4
+                      },
+                      "children": [
+                        {
+                          "type": "text",
+                          "variant": "caption",
+                          "value": "{{props.app.spec.screens[screen].title && !contains(props.app.spec.screens[screen].title, '{{') ? props.app.spec.screens[screen].title : screen}}"
+                        },
+                        {
+                          "type": "app",
+                          "spec": "{{props.app.spec}}",
+                          "screen": "{{screen}}",
+                          "scale": 0.66,
+                          "selecting": "{{selecting}}",
+                          "onSelect": {
+                            "set": "selected",
+                            "to": "value"
+                          },
+                          "style": {
+                            "width": 257,
+                            "height": 557,
+                            "radius": 26,
+                            "background": "background",
+                            "borderWidth": 1,
+                            "borderColor": "border"
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "type": "row",
+                  "style": {
+                    "paddingX": 16,
+                    "paddingY": 6,
+                    "gap": 10,
+                    "align": "center"
+                  },
+                  "children": [
+                    {
+                      "type": "button",
+                      "variant": "{{selecting ? 'primary' : 'secondary'}}",
+                      "label": "Select",
+                      "style": {
+                        "paddingX": 14,
+                        "paddingY": 6,
+                        "radius": 14,
+                        "fontSize": 15,
+                        "shrink": 0
+                      },
+                      "onTap": [
+                        {
+                          "toggle": "selecting"
+                        },
+                        {
+                          "if": "!selecting",
+                          "then": {
+                            "set": "selected",
+                            "to": "null"
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "type": "text",
+                      "variant": "caption",
+                      "style": {
+                        "grow": 1
+                      },
+                      "value": "{{selected ? 'Selected ' + selected.type + (selected.text ? ': “' + selected.text + '”' : '') : (selecting ? 'Tap a part of the screen.' : 'Swipe between screens. Select a part to change just that.')}}"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "scroll",
+              "if": "mode == 'code'",
+              "style": {
+                "width": "100%",
+                "height": "100%",
+                "paddingX": 12,
+                "paddingBottom": 12
+              },
+              "children": [
+                {
+                  "type": "list",
+                  "variant": "plain",
+                  "separators": false,
+                  "items": "jsonLines(props.app.spec.screens[(focus || props.app.spec.start || first(keys(props.app.spec.screens)))], (last(props.app.history ?? [])?.screens ?? {})[(focus || props.app.spec.start || first(keys(props.app.spec.screens)))])",
+                  "as": "line",
+                  "key": "line.id",
+                  "header": "{{'screens.' + (focus || props.app.spec.start || first(keys(props.app.spec.screens)))}}",
+                  "row": {
+                    "type": "text",
+                    "value": "{{line.text}}",
+                    "style": {
+                      "fontFamily": "mono",
+                      "fontSize": 12,
+                      "lineHeight": 17,
+                      "paddingX": 6,
+                      "color": "{{line.kind == 'del' ? 'danger' : (line.kind == 'add' ? 'success' : 'text')}}",
+                      "background": "{{line.kind == 'add' ? '#2f9e6a22' : (line.kind == 'del' ? '#e5484d1f' : 'background')}}"
+                    }
+                  },
+                  "rowStyle": {
+                    "paddingY": 0,
+                    "minHeight": 0,
+                    "paddingX": 0
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "column",
+          "style": {
+            "paddingX": 16,
+            "paddingTop": 10,
+            "paddingBottom": 12,
+            "gap": 10,
+            "background": "background"
+          },
+          "children": [
+            {
+              "type": "list",
+              "if": "len(log) > 0",
+              "variant": "plain",
+              "separators": false,
+              "rowStyle": {
+                "paddingY": 3,
+                "minHeight": 0,
+                "paddingX": 0
+              },
+              "items": "slice(log, max(0, len(log) - 4))",
+              "as": "entry",
+              "key": "entry.id",
+              "row": {
+                "type": "row",
+                "style": {
+                  "gap": 8,
+                  "align": "center"
+                },
+                "children": [
+                  {
+                    "type": "text",
+                    "variant": "callout",
+                    "value": "{{entry.text}}",
+                    "style": {
+                      "grow": 1,
+                      "color": "{{entry.role == 'error' ? 'danger' : (entry.role == 'user' ? 'text' : (entry.role == 'model' ? 'accent' : 'muted'))}}"
+                    }
+                  },
+                  {
+                    "type": "image",
+                    "if": "entry.image",
+                    "src": "{{entry.image}}",
+                    "style": {
+                      "width": 46,
+                      "height": 100,
+                      "radius": 6,
+                      "borderWidth": 1,
+                      "borderColor": "border"
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "variant": "caption",
+              "if": "busy || recording",
+              "value": "{{recording ? 'Listening… tap the mic again to send' : 'Working…'}}",
+              "style": {
+                "color": "{{recording ? 'danger' : 'muted'}}"
+              }
+            },
+            {
+              "type": "row",
+              "style": {
+                "gap": 8,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "type": "textfield",
+                  "placeholder": "{{selected ? 'Change the selected ' + selected.type : 'Describe a change'}}",
+                  "bind": "prompt",
+                  "onSubmit": {
+                    "call": "builder.edit",
+                    "args": {
+                      "id": "props.app.id",
+                      "prompt": "prompt"
+                    }
+                  }
+                },
+                {
+                  "type": "overlay",
+                  "style": {
+                    "width": 44,
+                    "height": 44,
+                    "radius": 22,
+                    "background": "{{recording ? 'danger' : 'surface'}}",
+                    "transition": 150
+                  },
+                  "onTap": {
+                    "if": "recording",
+                    "then": {
+                      "call": "builder.voiceStop",
+                      "args": {
+                        "id": "props.app.id"
+                      }
+                    },
+                    "else": {
+                      "call": "builder.voiceStart"
+                    }
+                  },
+                  "children": [
+                    {
+                      "type": "shape",
+                      "path": "{{recording ? '@stop' : '@mic'}}",
+                      "fill": "{{recording ? 'onAccent' : 'accent'}}",
+                      "style": {
+                        "width": 22,
+                        "height": 22
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "button",
+                  "label": "Send",
+                  "style": {
+                    "opacity": "{{busy || trim(prompt) == '' ? 0.4 : 1}}"
+                  },
+                  "onTap": {
+                    "call": "builder.edit",
+                    "args": {
+                      "id": "props.app.id",
+                      "prompt": "prompt"
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -1,7 +1,7 @@
 // A deterministic host for Node tests: fixed-width glyphs, greedy word wrap.
 import { DatabaseSync } from "node:sqlite";
 import type { Database, Host, Op, SqlValue, TextMeasureStyle } from "../src/bridge.ts";
-import { Runtime } from "../src/runtime.ts";
+import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { AppSpec } from "../src/spec.ts";
 
 export const CHAR = 0.5; // glyph width as a fraction of font size
@@ -87,9 +87,9 @@ export function frame(host: TestHost): Op[] {
   return host.batches.slice(before).flat();
 }
 
-export function boot(spec: AppSpec, db?: TestHost["db"], vault?: TestHost["vault"]) {
+export function boot(spec: AppSpec, db?: TestHost["db"], vault?: TestHost["vault"], options?: RuntimeOptions) {
   const host = makeHost(db, vault);
-  const rt = new Runtime(host);
+  const rt = new Runtime(host, options);
   rt.setViewport(390, 844);
   rt.load(spec);
   const ops = frame(host);

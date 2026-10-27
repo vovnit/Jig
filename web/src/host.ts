@@ -3,8 +3,11 @@
 
 import { type Database, type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
 import { RowGestures } from "./rows.ts";
+import { callService } from "./services.ts";
 
 type Style = Record<string, unknown>;
+
+const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
 
 const EASING: Record<string, string> = {
   ease: "cubic-bezier(.4,0,.2,1)",
@@ -56,6 +59,10 @@ export class DomHost implements Host {
     },
   };
 
+  call(service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void): void {
+    callService(service, args, done);
+  }
+
   requestFrame(cb: () => void): void {
     requestAnimationFrame(cb);
   }
@@ -70,6 +77,7 @@ export class DomHost implements Host {
 
   measureText(text: string, style: TextMeasureStyle, maxWidth: number): Size {
     const p = this.probe;
+    p.style.fontFamily = style.fontFamily === "mono" ? MONO : "";
     p.style.fontSize = `${style.fontSize}px`;
     p.style.fontWeight = String(style.fontWeight);
     p.style.lineHeight = `${style.lineHeight}px`;
@@ -84,7 +92,8 @@ export class DomHost implements Host {
     const transition = ops.find((op) => op[0] === "command" && op[2] === "transition") as
       | ["command", number, string, [kind: "push" | "pop", style: string, duration: number]]
       | undefined;
-    const rootEl = this.els.get(1);
+    // The command names the root of the runtime that navigated: the shell, or an app inside it.
+    const rootEl = transition ? this.els.get(transition[1]) : undefined;
     const snapshot = transition && rootEl ? (rootEl.cloneNode(true) as HTMLElement) : null;
     this.createdNow.clear();
     for (const op of ops) {
@@ -111,6 +120,9 @@ export class DomHost implements Host {
             }
           }
           if (child.parentElement !== parent || child.nextElementSibling !== ref) parent.insertBefore(child, ref);
+          // An embedded app's root, drawn at the `app` node's scale.
+          const scale = this.scales.get(op[1]);
+          if (scale !== undefined) this.applyScale(child, scale);
           // A node with a value transition fades in when it appears in an existing list.
           const transitionMs = (this.transitions.get(op[2]) ?? 0);
           // A list row scrolling into its window (`quiet`) just appears.
@@ -158,6 +170,86 @@ export class DomHost implements Host {
   }
 
   private readonly createdNow = new Set<number>();
+  /** The page a paging hscroll should show, by node. */
+  private readonly pages = new Map<number, number>();
+
+  /** Scrolls a paging hscroll to its page. */
+  private showPage(id: number, el: HTMLElement, smooth: boolean): void {
+    const page = this.pages.get(id) ?? 0;
+    requestAnimationFrame(() => {
+      const left = page * el.clientWidth;
+      if (Math.abs(el.scrollLeft - left) > 1) el.scrollTo({ left, behavior: smooth ? "smooth" : "instant" });
+    });
+  }
+
+  /** Pages snap when a swipe ends (CSS scroll snapping ignores translated children), and report which one shows. */
+  private pageable(id: number, el: HTMLElement): void {
+    if (el.dataset.paging) return;
+    el.dataset.paging = "1";
+    let timer = 0;
+    el.addEventListener("scroll", () => {
+      clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const page = Math.round(el.scrollLeft / Math.max(1, el.clientWidth));
+        el.scrollTo({ left: page * el.clientWidth, behavior: "smooth" });
+        if (page !== this.pages.get(id)) {
+          this.pages.set(id, page);
+          this.runtime.dispatch(id, "page", { index: page });
+        }
+      }, 120);
+    }, { passive: true });
+  }
+
+  /** A whiteboard zooms with a pinch or ctrl+wheel; CSS `zoom` scales its content and its scroll size together. */
+  private zoomable(el: HTMLElement, content: HTMLElement): void {
+    let zoom = 1;
+    const set = (z: number, cx: number, cy: number) => {
+      const next = Math.min(2.5, Math.max(0.3, z));
+      const r = el.getBoundingClientRect();
+      const px = (el.scrollLeft + cx - r.left) / zoom;
+      const py = (el.scrollTop + cy - r.top) / zoom;
+      zoom = next;
+      content.style.zoom = String(zoom);
+      el.scrollLeft = px * zoom - (cx - r.left);
+      el.scrollTop = py * zoom - (cy - r.top);
+    };
+    el.addEventListener("wheel", (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      set(zoom * Math.exp(-e.deltaY / 200), e.clientX, e.clientY);
+    }, { passive: false });
+    const touches = new Map<number, { x: number; y: number }>();
+    let pinch: { d: number; zoom: number } | null = null;
+    el.addEventListener("pointerdown", (e) => {
+      if (e.pointerType !== "touch") return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (touches.size === 2) {
+        const [a, b] = [...touches.values()];
+        pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), zoom };
+      }
+    });
+    el.addEventListener("pointermove", (e) => {
+      if (!touches.has(e.pointerId)) return;
+      touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (pinch && touches.size === 2) {
+        const [a, b] = [...touches.values()];
+        set(pinch.zoom * (Math.hypot(a.x - b.x, a.y - b.y) / pinch.d), (a.x + b.x) / 2, (a.y + b.y) / 2);
+      }
+    });
+    const end = (e: PointerEvent) => {
+      touches.delete(e.pointerId);
+      if (touches.size < 2) pinch = null;
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+  }
+  /** `contentScale` of `app` nodes: a whiteboard card draws its app smaller. */
+  private readonly scales = new Map<number, number>();
+
+  private applyScale(el: HTMLElement, scale: number): void {
+    el.style.transformOrigin = "0 0";
+    el.style.scale = scale === 1 ? "" : String(scale);
+  }
   /** Value transition durations by node, for fading in new list items. */
   private readonly transitions = new Map<number, number>();
 
@@ -200,6 +292,7 @@ export class DomHost implements Host {
       this.transitions.delete(id);
       this.trims.delete(id);
       this.frames.delete(id);
+      this.scales.delete(id);
       this.rows.forget(id);
     }
   }
@@ -256,11 +349,13 @@ export class DomHost implements Host {
         break;
       }
       case "scroll":
-      case "hscroll": {
+      case "hscroll":
+      case "canvas": {
         el = document.createElement("div");
         const content = document.createElement("div");
         content.className = "jig-content";
         el.appendChild(content);
+        if (type === "canvas") this.zoomable(el, content);
         break;
       }
       default:
@@ -315,6 +410,41 @@ export class DomHost implements Host {
           content.style.height = `${h}px`;
           break;
         }
+        case "contentScale":
+          this.scales.set(id, Number(v) || 1);
+          for (const c of el.children) this.applyScale(c as HTMLElement, Number(v) || 1);
+          break;
+        case "interactive":
+          // A whiteboard card is a picture of the app: touches go to the card.
+          el.style.pointerEvents = v === false ? "none" : "";
+          break;
+        case "selecting":
+          el.dataset.selecting = v ? "1" : "";
+          if (v && !el.dataset.selectHooked) {
+            el.dataset.selectHooked = "1";
+            // In select mode a tap picks the part of the app under it instead of using it.
+            const pick = (e: Event) => {
+              if (!el.dataset.selecting) return;
+              e.preventDefault();
+              e.stopPropagation();
+              if (e.type !== "click") return;
+              const target = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
+              if (target && target !== el && el.contains(target)) this.runtime.dispatch(Number(target.dataset.id), "select");
+            };
+            for (const type of ["click", "pointerdown", "keydown", "input"]) el.addEventListener(type, pick, true);
+          }
+          break;
+        case "selected":
+          if (v) el.dataset.selected = "1";
+          else delete el.dataset.selected;
+          break;
+        case "paging":
+          if (v && type === "hscroll") this.pageable(id, el);
+          break;
+        case "page":
+          this.pages.set(id, Number(v) || 0);
+          this.showPage(id, el, !this.createdNow.has(id));
+          break;
         case "swipeActions":
           this.rows.setActions(id, el, v as { label: string; color: string }[] | null);
           break;
@@ -401,6 +531,7 @@ export class DomHost implements Host {
         case "textAlign": st.textAlign = String(val); break;
         case "fontSize": st.fontSize = val === "" ? "" : `${val}px`; break;
         case "fontWeight": st.fontWeight = String(val); break;
+        case "fontFamily": st.fontFamily = val === "mono" ? MONO : ""; break;
         case "lineHeight": st.lineHeight = val === "" ? "" : `${val}px`; break;
         case "padding": st.padding = Array.isArray(val) ? val.map((p) => `${p}px`).join(" ") : ""; break;
         case "transition": {

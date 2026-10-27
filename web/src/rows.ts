@@ -246,7 +246,8 @@ export class RowGestures {
   private makePanel(id: number, el: HTMLElement): HTMLElement {
     const panel = document.createElement("div");
     panel.className = "jig-swipe-actions";
-    (this.actions.get(id) ?? []).forEach((a, index) => {
+    // The first action is outermost, as a full swipe runs it (as in Mail).
+    [...(this.actions.get(id) ?? []).entries()].reverse().forEach(([index, a]) => {
       const b = document.createElement("button");
       b.textContent = a.label;
       b.style.background = a.color;

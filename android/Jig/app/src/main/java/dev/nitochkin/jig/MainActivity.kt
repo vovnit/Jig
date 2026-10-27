@@ -1,15 +1,11 @@
 package dev.nitochkin.jig
 
-import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Bundle
 import android.view.MotionEvent
-import android.view.View
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
-import android.widget.ImageButton
-import android.widget.PopupMenu
 import androidx.activity.BackEventCompat
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -22,18 +18,14 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Root surface for the Jig runtime: owns the Views renderer and the JS runtime,
- * keeps the runtime's viewport, keyboard, back stack and appearance in sync, and
- * switches between bundled app specs.
+ * Root surface for the Jig runtime: owns the Views renderer and the JS runtime, keeps the
+ * runtime's viewport, keyboard, back stack and appearance in sync, and starts the shell,
+ * whose list of apps the bundled demo specs seed.
  */
 class MainActivity : ComponentActivity() {
-    private data class BundledApp(val id: String, val name: String, val json: String)
-
     private lateinit var surface: JigLayout
     private lateinit var renderer: AndroidRenderer
     private lateinit var runtime: JigRuntime
-    private lateinit var menuButton: ImageButton
-    private var apps: List<BundledApp> = emptyList()
     private var insets = Rect()
     private var lastViewport: List<Double>? = null
 
@@ -60,8 +52,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private var permissionAnswer: ((Boolean) -> Unit)? = null
+    private val permission = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { granted ->
+        permissionAnswer?.invoke(granted)
+        permissionAnswer = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // The builder's voice input asks for the microphone when first used.
+        Services.requestPermission = { name, answer ->
+            runOnUiThread {
+                if (checkSelfPermission(name) == android.content.pm.PackageManager.PERMISSION_GRANTED) answer(true)
+                else {
+                    permissionAnswer = answer
+                    permission.launch(name)
+                }
+            }
+        }
         enableEdgeToEdge()
         surface = JigLayout(this)
         setContentView(surface)
@@ -70,11 +78,9 @@ class MainActivity : ComponentActivity() {
         runtime = JigRuntime(this, renderer)
         runtime.onTheme = ::applyTheme
         // System back pops a runtime screen while there is one to pop; otherwise Android handles it.
-        renderer.onNavDepth = { depth -> back.isEnabled = depth > 1 }
+        renderer.onCanGoBack = { back.isEnabled = it }
         onBackPressedDispatcher.addCallback(this, back)
-        apps = loadBundledApps()
 
-        setUpMenuButton()
         ViewCompat.setOnApplyWindowInsetsListener(surface) { _, windowInsets ->
             val bars = windowInsets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = windowInsets.getInsets(WindowInsetsCompat.Type.ime())
@@ -86,8 +92,8 @@ class MainActivity : ComponentActivity() {
         surface.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> updateViewport() }
 
         runtime.setColorScheme(isNight(resources.configuration))
-        val lastId = getSharedPreferences("jig", MODE_PRIVATE).getString("jig.lastApp", null)
-        (apps.firstOrNull { it.id == lastId } ?: apps.firstOrNull())?.let(::open)
+        val (shell, seeds) = bundledSpecs()
+        runtime.boot(shell, seeds)
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -109,7 +115,6 @@ class MainActivity : ComponentActivity() {
         if (surface.width == 0 || viewport == lastViewport) return
         lastViewport = viewport
         runtime.setViewport(viewport[0], viewport[1], viewport[2], viewport[3], viewport[4], viewport[5])
-        positionMenuButton()
     }
 
     private fun applyTheme(theme: JigRuntime.Theme) {
@@ -119,17 +124,10 @@ class MainActivity : ComponentActivity() {
             window.decorView.setBackgroundColor(it)
             renderer.screenBackground = it
         }
-        theme.colors["muted"]?.let(AndroidRenderer::color)?.let { menuButton.imageTintList = ColorStateList.valueOf(it) }
         WindowCompat.getInsetsController(window, surface).apply {
             isAppearanceLightStatusBars = !theme.isDark
             isAppearanceLightNavigationBars = !theme.isDark
         }
-    }
-
-    private fun open(app: BundledApp) {
-        runtime.load(app.json)
-        getSharedPreferences("jig", MODE_PRIVATE).edit().putString("jig.lastApp", app.id).apply()
-        menuButton.bringToFront()
     }
 
     // ---------- Keyboard: tapping outside a field dismisses it ----------
@@ -150,44 +148,15 @@ class MainActivity : ComponentActivity() {
         return super.dispatchTouchEvent(ev)
     }
 
-    // ---------- App switcher ----------
+    // ---------- Specs ----------
 
-    private fun setUpMenuButton() {
-        menuButton = ImageButton(this).apply {
-            setImageResource(R.drawable.ic_apps)
-            background = null
-            contentDescription = "Switch app"
-            setOnClickListener { v ->
-                PopupMenu(this@MainActivity, v).apply {
-                    apps.forEachIndexed { i, app -> menu.add(0, i, i, app.name) }
-                    setOnMenuItemClickListener { item ->
-                        open(apps[item.itemId])
-                        true
-                    }
-                }.show()
-            }
-        }
-        surface.addView(menuButton, FrameParams())
+    /** `shell.json`, and every other bundled spec (as a JSON array) for the shell's app list. */
+    private fun bundledSpecs(): Pair<String, String> {
+        val read = { file: String -> assets.open("runtime/$file").bufferedReader().use { it.readText() } }
+        val seeds = (assets.list("runtime") ?: emptyArray()).sorted()
+            .filter { it.endsWith(".json") && it != "shell.json" }
+            .map(read)
+            .filter { runCatching { JSONObject(it).has("screens") }.getOrDefault(false) }
+        return read("shell.json") to seeds.joinToString(",", "[", "]")
     }
-
-    private fun positionMenuButton() {
-        val d = renderer.density
-        val size = (44 * d).roundToInt()
-        val p = menuButton.layoutParams as FrameParams
-        p.width = size
-        p.height = size
-        p.x = surface.width - insets.right - size - (12 * d).roundToInt()
-        p.y = insets.top + (4 * d).roundToInt()
-        menuButton.requestLayout()
-        menuButton.visibility = View.VISIBLE
-    }
-
-    private fun loadBundledApps(): List<BundledApp> =
-        (assets.list("runtime") ?: emptyArray()).filter { it.endsWith(".json") }.mapNotNull { file ->
-            val json = assets.open("runtime/$file").bufferedReader().use { it.readText() }
-            val spec = runCatching { JSONObject(json) }.getOrNull() ?: return@mapNotNull null
-            if (!spec.has("screens")) return@mapNotNull null
-            val id = spec.optString("id").ifEmpty { return@mapNotNull null }
-            BundledApp(id, spec.optString("name", id), json)
-        }.sortedBy { it.name }
 }

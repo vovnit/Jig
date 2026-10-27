@@ -46,7 +46,8 @@ import kotlin.math.roundToInt
  */
 class AndroidRenderer(private val surface: JigLayout) {
     var dispatch: ((Int, String, JSONObject) -> Unit)? = null
-    var onNavDepth: ((Int) -> Unit)? = null
+    /** Called after each batch with whether a screen stack on screen can pop. */
+    var onCanGoBack: ((Boolean) -> Unit)? = null
     var accentColor = 0xFF3B6EF6.toInt()
     var isDark = false
     /** The theme's background, for making a screen opaque while it slides. */
@@ -75,18 +76,18 @@ class AndroidRenderer(private val surface: JigLayout) {
     /** Removed views still fading out: they stay on screen but no longer count as children. */
     private val leaving = HashSet<View>()
 
-    /** The runtime's navigation depth, reported with every batch. */
-    var navDepth = 1
-        private set
-    /** What each screen below the current one looked like when it was left (taken on push),
-     *  shown under the current screen during a predictive back gesture. */
-    private val screenSnapshots = ArrayList<Bitmap?>()
+    /** Screen stacks, one per runtime root (the shell, or an app running inside it): the
+     *  navigation depth, and what each screen below the current one looked like when it was
+     *  left (taken on push), shown under the current screen during a predictive back gesture. */
+    private val depths = HashMap<Int, Int>()
+    private val screenSnapshots = HashMap<Int, ArrayList<Bitmap?>>()
     private var screensAnimating = false
+    private var interactiveTarget = 0
     private var interactiveBack: ImageView? = null
     private var interactiveDim: ColorDrawable? = null
     private var interactiveProgress = 0f
-    /** Set once a back gesture committed: the pop it causes is already on screen. */
-    private var awaitingInteractivePop = false
+    /** Set once a back gesture committed: the pop it causes (on this root) is already on screen. */
+    private var awaitingInteractivePop = 0
     private val context = surface.context
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
@@ -107,16 +108,21 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     // ---------- Ops ----------
 
-    fun apply(json: String, navDepth: Int) {
+    fun apply(json: String) {
         val ops = JSONArray(json)
-        // A screen transition: keep a picture of the old screen to animate away from.
+        // A screen transition: keep a picture of the old screen to animate away from. The
+        // command names the root of the runtime that navigated.
         var screenTransition: JSONArray? = null
+        var target = 0
         for (i in 0 until ops.length()) {
             val op = ops.getJSONArray(i)
-            if (op.getString(0) == "command" && op.getString(2) == "transition") screenTransition = op.getJSONArray(3)
+            if (op.getString(0) == "command" && op.getString(2) == "transition") {
+                screenTransition = op.getJSONArray(3)
+                target = op.getInt(1)
+            }
         }
-        val root = nodes[1]?.view
-        val interactivePop = awaitingInteractivePop && screenTransition != null
+        val root = nodes[target]?.view
+        val interactivePop = target != 0 && awaitingInteractivePop == target
         val bitmap = if (screenTransition != null && !interactivePop && root != null && root.isLaidOut && root.width > 0) root.drawToBitmap() else null
         val snapshot = bitmap?.let { b -> root?.let { snapshotView(b, it) } }
         createdNow.clear()
@@ -129,7 +135,10 @@ class AndroidRenderer(private val surface: JigLayout) {
                 "insert" -> insert(op.getInt(1), op.getInt(2), op.getInt(3), animated = snapshot == null && !interactivePop && !op.optBoolean(4))
                 "remove" -> remove(op.getInt(2), animated = snapshot == null && !interactivePop && !op.optBoolean(3))
                 "frame" -> frame(op.getInt(1), op.getDouble(2), op.getDouble(3), op.getDouble(4), op.getDouble(5))
-                "command" -> if (op.getString(2) == "focus") nodes[op.getInt(1)]?.view?.requestFocus()
+                "command" -> when (op.getString(2)) {
+                    "focus" -> nodes[op.getInt(1)]?.view?.requestFocus()
+                    "depth" -> depths[op.getInt(1)] = op.getJSONArray(3).getInt(0)
+                }
             }
         }
         val kind = screenTransition?.getString(0)
@@ -139,11 +148,13 @@ class AndroidRenderer(private val surface: JigLayout) {
             animateScreens(kind!!, screenTransition.getString(1), screenTransition.getLong(2), root, snapshot)
         }
         // Keep one snapshot per screen below the current one, for predictive back.
-        if (navDepth > this.navDepth && kind == "push") screenSnapshots.add(bitmap)
-        while (screenSnapshots.size < navDepth - 1) screenSnapshots.add(null)
-        while (screenSnapshots.size > maxOf(0, navDepth - 1)) screenSnapshots.removeAt(screenSnapshots.size - 1)
-        this.navDepth = navDepth
-        onNavDepth?.invoke(navDepth)
+        if (target != 0 && kind == "push") screenSnapshots.getOrPut(target) { ArrayList() }.add(bitmap)
+        for ((id, depth) in depths) {
+            val stack = screenSnapshots.getOrPut(id) { ArrayList() }
+            while (stack.size < depth - 1) stack.add(null)
+            while (stack.size > maxOf(0, depth - 1)) stack.removeAt(stack.size - 1)
+        }
+        onCanGoBack?.invoke(backTarget() != null)
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         surface.post { revealFocusedField() }
     }
@@ -186,6 +197,7 @@ class AndroidRenderer(private val surface: JigLayout) {
         val container = when (parent) {
             is JigScrollView -> parent.content
             is JigHScrollView -> parent.content
+            is JigCanvasView -> parent.content
             is ViewGroup -> parent
             else -> return
         }
@@ -196,6 +208,8 @@ class AndroidRenderer(private val surface: JigLayout) {
         (child.parent as? ViewGroup)?.removeView(child)
         val at = if (index < siblings.size) container.indexOfChild(siblings[index]) else container.childCount
         container.addView(child, at, child.layoutParams as? FrameParams ?: FrameParams())
+        // An embedded app's root, drawn at its `app` node's scale from the top left.
+        (num(nodes[parentId]?.props?.get("contentScale")))?.let { applyScale(child, it.toFloat()) }
         // A node with a value transition fades in when it appears in an existing list.
         val t = nodes[childId]?.let(::transition)
         if (animated && t != null && childId in createdNow && parentId !in createdNow) {
@@ -229,8 +243,11 @@ class AndroidRenderer(private val surface: JigLayout) {
         if (id != null && nodes[id]?.view === view) {
             nodes.remove(id)
             targets.remove(id)
+            depths.remove(id)
+            screenSnapshots.remove(id)
             reportingScroll.remove(id)
             rows.forget(id)
+            selections.remove(id)
         }
         if (view === focusedField) focusedField = null
         if (view is ViewGroup) for (i in 0 until view.childCount) forget(view.getChildAt(i))
@@ -281,6 +298,74 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     private fun lerp(a: Int, b: Int, f: Float) = (a + (b - a) * f).roundToInt()
 
+    // ---------- Screenshots (the builder) ----------
+
+    /** A PNG (base64) of a node's view at one pixel per dp; a scaled card's app is drawn unscaled. */
+    fun snapshot(id: Int): String? {
+        val view = nodes[id]?.view ?: return null
+        if (view.width == 0 || view.height == 0) return null
+        val full = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(full)
+        canvas.drawColor(screenBackground)
+        view.draw(canvas)
+        val small = Bitmap.createScaledBitmap(full, (view.width / density).roundToInt().coerceAtLeast(1), (view.height / density).roundToInt().coerceAtLeast(1), true)
+        val out = java.io.ByteArrayOutputStream()
+        small.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
+    // ---------- Select mode (the builder) ----------
+
+    private val selections = HashMap<Int, Pair<GradientDrawable, View.OnLayoutChangeListener>>()
+
+    /** The deepest runtime node under a point, in [v]'s coordinates (children may be scaled). */
+    private fun deepest(v: View, x: Float, y: Float): View? {
+        if (x < 0 || y < 0 || x > v.width || y > v.height) return null
+        if (v is ViewGroup) {
+            for (i in v.childCount - 1 downTo 0) {
+                val c = v.getChildAt(i)
+                if (c.visibility != View.VISIBLE) continue
+                val pt = floatArrayOf(x + v.scrollX - c.left, y + v.scrollY - c.top)
+                if (!c.matrix.isIdentity) android.graphics.Matrix().also { c.matrix.invert(it) }.mapPoints(pt)
+                deepest(c, pt[0], pt[1])?.let { return it }
+            }
+        }
+        val id = v.tag as? Int ?: return null
+        return v.takeIf { nodes[id]?.view === it }
+    }
+
+    /** The selected node's outline, in the accent color, drawn over it. */
+    private fun setSelected(view: View, on: Boolean) {
+        val id = view.tag as? Int ?: return
+        val existing = selections[id]
+        if (!on) {
+            existing?.let { (d, l) ->
+                view.overlay.remove(d)
+                view.removeOnLayoutChangeListener(l)
+            }
+            selections.remove(id)
+            return
+        }
+        if (existing != null) return
+        val outline = GradientDrawable().apply {
+            setColor(Color.TRANSPARENT)
+            setStroke((2 * density).roundToInt(), accentColor)
+            cornerRadius = 4 * density
+            setBounds(0, 0, view.width, view.height)
+        }
+        val follow = View.OnLayoutChangeListener { v, _, _, _, _, _, _, _, _ -> outline.setBounds(0, 0, v.width, v.height) }
+        view.addOnLayoutChangeListener(follow)
+        view.overlay.add(outline)
+        selections[id] = outline to follow
+    }
+
+    private fun applyScale(view: View, scale: Float) {
+        view.pivotX = 0f
+        view.pivotY = 0f
+        view.scaleX = scale
+        view.scaleY = scale
+    }
+
     /** False when the user turned animations off (developer options, battery saver). */
     private fun animatorsEnabled() = Build.VERSION.SDK_INT < 26 || ValueAnimator.areAnimatorsEnabled()
 
@@ -312,15 +397,18 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     /** Starts a back gesture: the previous screen's snapshot appears under the current one. */
     fun beginInteractiveBack(): Boolean {
-        val root = nodes[1]?.view ?: return false
-        val bitmap = screenSnapshots.lastOrNull() ?: return false
-        if (navDepth <= 1 || screensAnimating || interactiveBack != null || awaitingInteractivePop) return false
+        if (screensAnimating || interactiveBack != null || awaitingInteractivePop != 0) return false
+        val target = backTarget() ?: return false
+        val root = nodes[target]?.view ?: return false
+        val container = root.parent as? ViewGroup ?: return false
+        val bitmap = screenSnapshots[target]?.lastOrNull() ?: return false
         val snapshot = snapshotView(bitmap, root)
         val dim = ColorDrawable(Color.BLACK).apply { alpha = 31 }
         snapshot.foreground = dim
         snapshot.translationX = -root.width * 0.3f
-        surface.addView(snapshot, surface.indexOfChild(root))
+        container.addView(snapshot, container.indexOfChild(root))
         root.background = ColorDrawable(screenBackground)
+        interactiveTarget = target
         interactiveBack = snapshot
         interactiveDim = dim
         interactiveProgress = 0f
@@ -328,9 +416,31 @@ class AndroidRenderer(private val surface: JigLayout) {
     }
 
     /** Follows the gesture: 0 is where it started, 1 is the screen fully off to the right. */
+    /** The innermost screen stack on screen that can pop: an app inside the shell before the shell. */
+    private fun backTarget(): Int? {
+        var best: Int? = null
+        var bestLevel = -1
+        for ((id, depth) in depths) {
+            if (depth <= 1) continue
+            val view = nodes[id]?.view ?: continue
+            if (!view.isAttachedToWindow) continue
+            var level = 0
+            var v = view.parent
+            while (v != null) {
+                level++
+                v = v.parent
+            }
+            if (level > bestLevel) {
+                best = id
+                bestLevel = level
+            }
+        }
+        return best
+    }
+
     fun updateInteractiveBack(progress: Float) {
         val snapshot = interactiveBack ?: return
-        val root = nodes[1]?.view ?: return
+        val root = nodes[interactiveTarget]?.view ?: return
         val p = progress.coerceIn(0f, 1f)
         interactiveProgress = p
         root.translationX = root.width * p
@@ -348,11 +458,11 @@ class AndroidRenderer(private val surface: JigLayout) {
             addUpdateListener { updateInteractiveBack(it.animatedValue as Float) }
             doOnEnd {
                 if (commit) {
-                    awaitingInteractivePop = true
+                    awaitingInteractivePop = interactiveTarget
                     pop()
                 } else {
-                    surface.removeView(snapshot)
-                    nodes[1]?.view?.let { restoreRoot(it) }
+                    (snapshot.parent as? ViewGroup)?.removeView(snapshot)
+                    nodes[interactiveTarget]?.view?.let { restoreRoot(it, interactiveTarget) }
                     interactiveBack = null
                 }
             }
@@ -361,15 +471,15 @@ class AndroidRenderer(private val surface: JigLayout) {
     }
 
     private fun finishInteractivePop() {
-        nodes[1]?.view?.let { restoreRoot(it) }
-        interactiveBack?.let { surface.removeView(it) }
+        nodes[interactiveTarget]?.view?.let { restoreRoot(it, interactiveTarget) }
+        interactiveBack?.let { (it.parent as? ViewGroup)?.removeView(it) }
         interactiveBack = null
-        awaitingInteractivePop = false
+        awaitingInteractivePop = 0
     }
 
-    private fun restoreRoot(root: View) {
+    private fun restoreRoot(root: View, id: Int) {
         root.translationX = 0f
-        nodes[1]?.let { root.background = it.background }
+        nodes[id]?.let { root.background = it.background }
     }
 
     /**
@@ -378,7 +488,9 @@ class AndroidRenderer(private val surface: JigLayout) {
      */
     private fun animateScreens(kind: String, style: String, duration: Long, root: View, snapshot: ImageView) {
         val w = root.width.toFloat()
-        val index = surface.indexOfChild(root)
+        // The screens move inside the navigating root's parent: the surface, or an `app` node.
+        val container = root.parent as? ViewGroup ?: surface
+        val index = container.indexOfChild(root)
         val interpolator = PathInterpolator(0.2f, 0.8f, 0.2f, 1f)
         // The root is transparent outside its screen (the system bar bands); while it moves,
         // make it opaque so the old screen doesn't show through.
@@ -388,23 +500,23 @@ class AndroidRenderer(private val surface: JigLayout) {
         screensAnimating = true
         val done = {
             screensAnimating = false
-            surface.removeView(snapshot)
+            container.removeView(snapshot)
             root.background = rootBackground
             root.foreground = null
             root.translationX = 0f
         }
         if (style == "fade" || !animatorsEnabled()) {
-            surface.addView(snapshot, index + 1)
+            container.addView(snapshot, index + 1)
             snapshot.animate().alpha(0f).setDuration(duration).withEndAction(done)
         } else if (kind == "push") {
-            surface.addView(snapshot, index)
+            container.addView(snapshot, index)
             snapshot.foreground = dim
             root.translationX = w
             root.animate().translationX(0f).setDuration(duration).setInterpolator(interpolator).withEndAction(done)
             snapshot.animate().translationX(-w * 0.3f).setDuration(duration).setInterpolator(interpolator)
             ObjectAnimator.ofInt(dim, "alpha", 0, 31).setDuration(duration).start()
         } else {
-            surface.addView(snapshot, index + 1)
+            container.addView(snapshot, index + 1)
             root.foreground = dim
             root.translationX = -w * 0.3f
             root.animate().translationX(0f).setDuration(duration).setInterpolator(interpolator).withEndAction(done)
@@ -456,6 +568,7 @@ class AndroidRenderer(private val surface: JigLayout) {
         "image" -> ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         "scroll" -> JigScrollView(context)
         "hscroll" -> JigHScrollView(context)
+        "canvas" -> JigCanvasView(context)
         else -> JigLayout(context)
     }
 
@@ -484,13 +597,21 @@ class AndroidRenderer(private val surface: JigLayout) {
                 node.backgroundColor = target
             }
             bg.cornerRadius = radius
-            val border = num(s["borderWidth"]) ?: 0.0
-            bg.setStroke((border * density).roundToInt(), color(s["borderColor"]) ?: Color.TRANSPARENT)
+            val border = ((num(s["borderWidth"]) ?: 0.0) * density).roundToInt()
+            val borderColor = color(s["borderColor"]) ?: Color.TRANSPARENT
+            if (node.type == "app") {
+                // The embedded app covers the background, so its card's border goes in front.
+                bg.setStroke(0, Color.TRANSPARENT)
+                view.foreground = if (border > 0) GradientDrawable().apply {
+                    cornerRadius = radius
+                    setStroke(border, borderColor)
+                } else null
+            } else bg.setStroke(border, borderColor)
             view.background = bg
         }
         // Scroll views must always clip, or scrolled content draws over the header. Containers
         // don't clip their children (see JigLayout), so clipping comes from each view's own outline.
-        view.clipToOutline = radius > 0 || node.type == "image" || node.type == "scroll" || node.type == "hscroll" || s["clip"] == true
+        view.clipToOutline = radius > 0 || node.type == "image" || node.type == "scroll" || node.type == "hscroll" || node.type == "canvas" || s["clip"] == true
         val alpha = (num(s["opacity"]) ?: 1.0).toFloat()
         if (tr != null && view.alpha != alpha) view.animate().alpha(alpha).setDuration(tr.duration).setInterpolator(tr.interpolator)
         else if (tr == null) view.alpha = alpha
@@ -511,6 +632,20 @@ class AndroidRenderer(private val surface: JigLayout) {
             )
         }
 
+        if (node.type == "app" && view is JigLayout) {
+            // A whiteboard card is a picture of the app: touches go to the card.
+            view.blocksTouches = p["interactive"] == false
+            val scale = (num(p["contentScale"]) ?: 1.0).toFloat()
+            for (i in 0 until view.childCount) view.getChildAt(i).takeIf { it.tag is Int }?.let { applyScale(it, scale) }
+            // Select mode: a tap picks the deepest node under it instead of using it.
+            view.onSelectTap = if (p["selecting"] == true) { x, y ->
+                deepest(view, x, y)?.takeIf { it !== view }?.let {
+                    view.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+                    dispatch?.invoke(it.tag as Int, "select", JSONObject())
+                }
+            } else null
+        }
+        setSelected(view, p["selected"] == true)
         if (view is JigLayout) {
             (p["swipeActions"] as? JSONArray)?.let { list ->
                 rows.setActions(view, (0 until list.length()).map { i ->
@@ -535,6 +670,7 @@ class AndroidRenderer(private val surface: JigLayout) {
                         "right", "end" -> Layout.Alignment.ALIGN_OPPOSITE
                         else -> if (node.type == "button") Layout.Alignment.ALIGN_CENTER else Layout.Alignment.ALIGN_NORMAL
                     },
+                    mono = s["fontFamily"] == "mono",
                 )
             }
             "textfield" -> {
@@ -595,7 +731,16 @@ class AndroidRenderer(private val surface: JigLayout) {
                 }
             }
             "image" -> loadImage(str(p["src"]), view as ImageView, view.tag as Int)
-            "scroll", "hscroll" -> {
+            "scroll", "hscroll", "canvas" -> {
+                if (view is JigHScrollView) {
+                    // A paging hscroll (the builder's screen pager) reports the page it settles on.
+                    view.paging = p["paging"] == true
+                    if (view.paging && view.onPage == null) {
+                        val id = view.tag as Int
+                        view.onPage = { page -> dispatch?.invoke(id, "page", JSONObject().put("index", page)) }
+                    }
+                    (num(p["page"]))?.let { view.show(it.toInt(), animated = view.isLaidOut) }
+                }
                 // A long list inside needs the offset to know which rows to build.
                 if (p["reportScroll"] == true && view is JigScrollView && reportingScroll.add(view.tag as Int)) {
                     val id = view.tag as Int
@@ -606,7 +751,11 @@ class AndroidRenderer(private val surface: JigLayout) {
                 val size = p["contentSize"] as? JSONArray ?: return
                 val w = (size.getDouble(0) * density).roundToInt()
                 val h = (size.getDouble(1) * density).roundToInt()
-                if (view is JigScrollView) view.setContentSize(w, h) else (view as JigHScrollView).setContentSize(w, h)
+                when (view) {
+                    is JigScrollView -> view.setContentSize(w, h)
+                    is JigHScrollView -> view.setContentSize(w, h)
+                    is JigCanvasView -> view.setContentSize(w, h)
+                }
             }
         }
     }

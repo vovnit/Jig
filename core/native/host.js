@@ -3,8 +3,8 @@
 // and exposes `__jig*` entry points the platform calls. Plain ES5: no build step.
 //
 // __native contract:
-//   apply(opsJson, navDepth)                    one batch of ops per frame
-//   measure(text, size, weight, lineHeight, maxWidth) -> [width, height]
+//   apply(opsJson)                              one batch of ops per frame
+//   measure(text, size, weight, lineHeight, maxWidth, family) -> [width, height]   family: "" or "mono"
 //   measureControl(type) -> [width, height]     [0, 0] means "use the default"
 //   requestFrame()                              call __jigFrame() before the next paint
 //   sqlQuery(sql, paramsJson) -> json            {"rows": [...]} or {"error": "..."}
@@ -13,8 +13,12 @@
 //   secretSet(app, key, value) -> error | null, secretDelete(app, key) -> error | null
 //   secretClear(app) -> error | null
 //   now() -> milliseconds, log(level, message)
+//   call(service, argsJson, callId)              async: the host answers __jigResolve(callId, json)
+//                                                with {"result": ...} or {"error": "..."} on the JS thread
 
 var __frameQueue = [];
+var __calls = {};
+var __nextCall = 1;
 
 function check(error) {
   if (error) throw new Error(error);
@@ -27,9 +31,9 @@ function sqlResult(json) {
 }
 
 var host = {
-  apply: function (ops) { __native.apply(JSON.stringify(ops), runtime.nav.peek().length); },
+  apply: function (ops) { __native.apply(JSON.stringify(ops)); },
   measureText: function (text, s, maxWidth) {
-    var r = __native.measure(text, s.fontSize, s.fontWeight, s.lineHeight, maxWidth);
+    var r = __native.measure(text, s.fontSize, s.fontWeight, s.lineHeight, maxWidth, s.fontFamily || "");
     return { width: r[0], height: r[1] };
   },
   measureControl: function (type) {
@@ -51,18 +55,37 @@ var host = {
     },
     clear: function (app) { check(__native.secretClear(app)); }
   },
+  call: function (service, args, done) {
+    var id = __nextCall++;
+    __calls[id] = done;
+    __native.call(service, JSON.stringify(args || {}), id);
+  },
   now: function () { return __native.now(); },
   log: function (level, message) { __native.log(level, message); }
 };
 
-var runtime = new Jig.Runtime(host);
+// The top-level runtime always runs the shell, which may use the builder's services.
+var runtime = new Jig.Runtime(host, { trusted: true });
 
 function __jigFrame() {
   var q = __frameQueue;
   __frameQueue = [];
   for (var i = 0; i < q.length; i++) q[i]();
 }
-function __jigLoad(json) { runtime.load(JSON.parse(json), { fresh: true }); }
+/** Starts the shell, adding the bundled demo apps to its list. */
+function __jigBoot(shellJson, seedsJson) {
+  Jig.installBuilder(runtime);
+  runtime.load(JSON.parse(shellJson), { fresh: true });
+  Jig.seedApps(runtime, JSON.parse(seedsJson));
+}
+/** A host service finished (see call). */
+function __jigResolve(id, json) {
+  var done = __calls[id];
+  delete __calls[id];
+  if (!done) return;
+  var r = JSON.parse(json);
+  done(r.result, r.error);
+}
 function __jigSetColorScheme(scheme) { runtime.setColorScheme(scheme); }
 function __jigSetViewport(width, height, top, right, bottom, left) { runtime.setViewport(width, height, [top, right, bottom, left]); }
 function __jigDispatch(id, name, json) { runtime.dispatch(id, name, JSON.parse(json)); }

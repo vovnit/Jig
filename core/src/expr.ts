@@ -6,6 +6,9 @@
 //   len(filter(chores, c => !c.done))
 //   item.name + ' · ' + formatDate(item.at, 'HH:mm')
 
+import { jsonLines } from "./builder/code.ts";
+import { flow } from "./builder/flow.ts";
+
 export interface Scope {
   /** Returns undefined for unknown names; throws are reserved for real errors. */
   lookup(name: string): unknown;
@@ -457,6 +460,9 @@ function formatDate(v: unknown, fmt: unknown = "MMM d"): string {
 let uidCounter = 0;
 
 export const BUILTINS: Record<string, (...args: unknown[]) => unknown> = {
+  // The builder's whiteboard and code view (pure functions of a spec, safe for any app).
+  flow: (spec) => flow(spec),
+  jsonLines: (value, previous) => jsonLines(value, previous),
   len: (v) => (Array.isArray(v) || typeof v === "string" ? v.length : 0),
   filter: (l, f) => asList(l).filter((x) => Boolean(fnOrField(f)(x))),
   map: (l, f) => asList(l).map(fnOrField(f)),
@@ -485,6 +491,7 @@ export const BUILTINS: Record<string, (...args: unknown[]) => unknown> = {
     return out;
   },
   join: (l, sep) => asList(l).map(str).join(sep === undefined ? ", " : String(sep)),
+  indexOf: (l, v) => asList(l).findIndex((x) => x === v || JSON.stringify(x) === JSON.stringify(v)),
   contains: (h, n) => (Array.isArray(h) ? h.includes(n) : typeof h === "string" ? h.includes(str(n)) : false),
   keys: (o) => (o && typeof o === "object" && !Array.isArray(o) ? Object.keys(o) : []),
   min: (...a) => Math.min(...(a.length === 1 && Array.isArray(a[0]) ? a[0] : a).map(Number)),

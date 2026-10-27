@@ -45,9 +45,10 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     // ---------- API (call from main) ----------
 
-    fun load(specJson: String) {
+    /** Starts the shell; [seedsJson] is an array of bundled app specs for its list. */
+    fun boot(shellJson: String, seedsJson: String) {
         js.post {
-            call("__jigLoad", specJson)
+            call("__jigBoot", shellJson, seedsJson)
             publishTheme()
         }
     }
@@ -126,8 +127,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
         native.setProperty("apply", JSCallFunction { args ->
             val json = args[0] as String
-            val navDepth = (args.getOrNull(1) as? Number)?.toInt() ?: 1
-            main.post { renderer.apply(json, navDepth) }
+            main.post { renderer.apply(json) }
             null
         })
         native.setProperty("measure", JSCallFunction { args ->
@@ -138,6 +138,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
                 lineHeight = (args[3] as Number).toDouble(),
                 maxWidth = (args[4] as Number).toDouble(),
                 density = renderer.density,
+                mono = args.getOrNull(5) == "mono",
             )
             pair(size.first, size.second)
         })
@@ -154,6 +155,19 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
         native.setProperty("secretSet", JSCallFunction { args -> secrets.set(args[0] as String, args[1] as String, args[2] as String) })
         native.setProperty("secretDelete", JSCallFunction { args -> secrets.delete(args[0] as String, args[1] as String) })
         native.setProperty("secretClear", JSCallFunction { args -> secrets.clear(args[0] as String) })
+        native.setProperty("call", JSCallFunction { args ->
+            val id = (args[2] as Number).toInt()
+            val resolve: (String) -> Unit = { json -> js.post { call("__jigResolve", id, json) } }
+            if (args[0] == "screenshot") {
+                // A PNG of a node's view, drawn by the renderer on main.
+                val node = runCatching { JSONObject(args[1] as String).getInt("id") }.getOrDefault(0)
+                main.post {
+                    val png = renderer.snapshot(node)
+                    resolve(if (png != null) Services.result(JSONObject().put("data", png)) else Services.error("No view to take a picture of"))
+                }
+            } else Services.handle(args[0] as String, args[1] as String, resolve)
+            null
+        })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })
         native.setProperty("log", JSCallFunction { args ->
             Log.w(TAG, "${args[0]}: ${args[1]}")

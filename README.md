@@ -39,8 +39,8 @@ The Meta Model API is OpenAI-SDK compatible: only the key and base URL change.
 | Path | What |
 | --- | --- |
 | `core/` | The shared runtime in TypeScript: spec, expressions, signals, view tree, flex layout, bridge ops. Bundles to one file (`core/dist/jig-core.js`) for the web, JavaScriptCore (iOS) and QuickJS (Android). `core/native/host.js` is the glue both native hosts share. |
-| `web/` | The web host (DOM renderer and text measurement) and the playground: demo apps, live spec editing, ops and frame inspector. |
-| `specs/` | Demo app specs (water tracker, chore chart, medication log) and `showcase.json`, a parity check that uses every primitive. Also used as test fixtures. |
+| `web/` | The web host (DOM renderer and text measurement) and the playground: the shell on a phone frame, live spec editing of the open app, ops and frame inspector. |
+| `specs/` | `shell.json`, the container's own UI (app list and builder), plus demo app specs (water tracker, chore chart, medication log) and `showcase.json`, a parity check that uses every primitive. The demo specs seed the shell's app list and serve as test fixtures. |
 | `ios/` | The UIKit host: runs `jig-core.js` in JavaScriptCore and applies its ops to UIKit views. |
 | `android/` | The Android host: runs `jig-core.js` in QuickJS and applies its ops to Android Views. |
 
@@ -168,9 +168,25 @@ Native stays "dumb". It receives one batch of ops per frame:
 
 - Ops: `create`, `update`, `insert` (also moves), `remove` (destroys the subtree), `frame`, `command`. Only frames that actually changed are sent.
 - Animation stays native: a value transition travels as a style prop, and the host animates the node's next frame and style changes itself. A screen change adds a `transition` command to the batch; the host snapshots the old screen before applying the ops and animates the new one in over the snapshot, so the runtime never keeps two screens alive.
-- Events come back with the node id: `runtime.dispatch(id, "tap" | "change" | "submit" | "load", payload)`.
+- Events come back with the node id: `runtime.dispatch(id, "tap" | "change" | "submit" | "load", payload)`, and for lists and the builder `scroll`, `swipe`, `move`, `page` and `select`.
+- Asynchronous host services go through `Host.call(service, args, done)` (natively `__native.call` and `__jigResolve`), for the shell only.
 - Native keeps scroll physics, animations (JS describes a transition, native animates it), and text input: while the user types, native stays the source of truth and the runtime never echoes the value back, so the cursor doesn't jump.
 - The contract is in [`core/src/bridge.ts`](core/src/bridge.ts).
+
+### The shell and the builder
+
+The container's own UI is a Jig app too: [`specs/shell.json`](specs/shell.json), the only spec a host loads. Every platform gets it from the one spec.
+
+- **Home** lists the apps, seeded from the bundled specs. Tap to run one, swipe to change or delete it, hold to reorder. **New app** turns a sentence into an app.
+- **Run**: the app runs inside an `app` node, a child runtime with its own data, laid out at the node's size. Back pops the app's own screens before the shell's; each host keeps a screen stack per runtime root, so the back swipe stays interactive inside an app.
+- **Change** opens the builder on that app:
+  - **Board**: a pannable, zoomable `canvas` of live cards, one per screen, laid out by navigation depth with arrows for every `navigate` (`flow(spec)`). Each card is the app pinned to that screen and scaled down.
+  - **Screen**: the screens full size in a paging `hscroll`; swipe between them. **Select** makes a tap pick the part under it instead of using it: the host reports it, and the runtime maps it to its spec path (`/screens/main/body/children/1/row`), outlines it, and tells the model.
+  - **Code**: the focused screen's spec in a mono font, with the lines the last change touched tinted (`jsonLines`).
+  - A prompt bar: type, or tap the mic and speak (the audio goes to the model). The last steps show above it, with the model's screenshots. **Undo** walks the app's history.
+- **The model loop** ([`core/src/builder`](core/src/builder)): Muse Spark gets the spec format (generated from the runtime's own tables), the app's spec, what the user is looking at and has selected, and the request. It changes the app with `apply_patch` (JSON Patch) or `set_spec`; each result is validated by rendering every screen headlessly, and a rejected one returns its errors, which is the repair loop. It can `screenshot` a screen: the builder shows that screen and the host draws the app at full size. It ends with `finish`.
+- Container services reach the shell through `{"call": "builder.edit", "args": {...}}` actions and `Host.call` (`http`, `audio.start` / `audio.stop`, `screenshot`). Only the shell may call them; an app's spec can't.
+- The API key is a secret field of the shell, entered in Settings. The web playground reaches the API through the Vite dev server's proxy.
 
 ### JS engine
 
@@ -219,9 +235,10 @@ After profiling, if needed:
 - [x] Android host (Android Views + QuickJS): same feature set as iOS, with system back
 - [x] Per-app storage in SQLite (row per list item, incremental writes)
 - [x] Secret fields in the Keychain / Android Keystore, secure text fields
-- [ ] Spec generation from a description (Muse Spark, structured outputs)
-- [ ] Edit loop by prompt: changes apply instantly
-- [ ] Automatic repair of invalid specs
+- [x] The shell as a Jig app: app list, run, builder (whiteboard, screen pager, select, code view, undo)
+- [x] Embedded apps: child runtimes, scaled and pinned cards, back routing
+- [x] Spec generation and edit loop with Muse Spark: tools, validation by headless render, repair (tested with a scripted model; not yet against the live API)
+- [x] Voice requests and model screenshots on all three hosts (audio format for the hosted API still to confirm)
 
 ### Container services
 - [ ] Scheduler and background jobs

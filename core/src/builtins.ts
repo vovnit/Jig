@@ -68,6 +68,8 @@ export const SHAPES: Record<string, string> = {
   sparkle: "M12 2l2.2 6.6L21 11l-6.8 2.4L12 20l-2.2-6.6L3 11l6.8-2.4z",
   home: "M12 3 2 11h3v10h5v-6h4v6h5V11h3z",
   edit: "M4 17.2V20h2.8l8.3-8.3-2.8-2.8zm14.7-8.1a1 1 0 0 0 0-1.4l-2.4-2.4a1 1 0 0 0-1.4 0l-1.8 1.8 2.8 2.8z",
+  mic: "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21h2v-3.08A7 7 0 0 0 19 11z",
+  stop: "M7 7h10v10H7z",
 };
 
 /** Composite controls, built from primitives in the spec format. */

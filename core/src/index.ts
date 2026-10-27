@@ -1,4 +1,10 @@
 export { Runtime, PRIMITIVE_TYPES } from "./runtime.ts";
+export type { RuntimeOptions } from "./runtime.ts";
+export { seedApps, updateApp, runningApp, commitEdit, undoEdit, redoEdit } from "./builder/registry.ts";
+export { installBuilder } from "./builder/index.ts";
+export { validateSpec } from "./builder/validate.ts";
+export { applyPatch } from "./builder/patch.ts";
+export type { AppEntry } from "./builder/registry.ts";
 export { DataStore } from "./store.ts";
 export type { FrameStats, RuntimeError } from "./runtime.ts";
 export type { Host, Op, Props, Size, Database, SecretStore, SqlValue, Statement, TextMeasureStyle, HostEvent } from "./bridge.ts";

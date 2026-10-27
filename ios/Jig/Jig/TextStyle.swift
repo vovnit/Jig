@@ -3,15 +3,16 @@ import UIKit
 /// One place that turns the runtime's text metrics into UIKit attributes, so
 /// measurement and rendering always agree. Thread-safe: the runtime measures on its JS queue.
 nonisolated enum TextStyle {
-    static func font(size: Double, weight: Double) -> UIFont {
-        UIFont.systemFont(ofSize: size, weight: fontWeight(weight))
+    /// The system font, or its monospaced variant (`fontFamily: "mono"`, the builder's code view).
+    static func font(size: Double, weight: Double, mono: Bool = false) -> UIFont {
+        mono ? UIFont.monospacedSystemFont(ofSize: size, weight: fontWeight(weight)) : UIFont.systemFont(ofSize: size, weight: fontWeight(weight))
     }
 
     static func attributes(
-        size: Double, weight: Double, lineHeight: Double,
+        size: Double, weight: Double, lineHeight: Double, mono: Bool = false,
         color: UIColor = .black, align: NSTextAlignment = .natural
     ) -> [NSAttributedString.Key: Any] {
-        let font = font(size: size, weight: weight)
+        let font = font(size: size, weight: weight, mono: mono)
         let paragraph = NSMutableParagraphStyle()
         paragraph.minimumLineHeight = lineHeight
         paragraph.maximumLineHeight = lineHeight
@@ -26,8 +27,8 @@ nonisolated enum TextStyle {
         ]
     }
 
-    static func measure(_ text: String, size: Double, weight: Double, lineHeight: Double, maxWidth: Double) -> CGSize {
-        let string = NSAttributedString(string: text, attributes: attributes(size: size, weight: weight, lineHeight: lineHeight))
+    static func measure(_ text: String, size: Double, weight: Double, lineHeight: Double, maxWidth: Double, mono: Bool = false) -> CGSize {
+        let string = NSAttributedString(string: text, attributes: attributes(size: size, weight: weight, lineHeight: lineHeight, mono: mono))
         let rect = string.boundingRect(
             with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading],

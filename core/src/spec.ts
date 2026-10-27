@@ -8,7 +8,9 @@ export type Action =
   | { remove: string; at?: string; where?: string }
   | { navigate: string; params?: Record<string, string>; transition?: ScreenTransition }
   | { back: true }
-  | { if: string; then: Action | Action[]; else?: Action | Action[] };
+  | { if: string; then: Action | Action[]; else?: Action | Action[] }
+  /** A service of the container (the builder). Only the shell may call them. */
+  | { call: string; args?: Record<string, unknown> };
 
 export type Actions = Action | Action[];
 
@@ -65,6 +67,8 @@ export interface ListSpec extends NodeSpec {
   reorder?: boolean;
   /** Hairlines between rows (default true). */
   separators?: boolean;
+  /** Overrides the row's box (padding, minHeight): `{"paddingY": 0, "minHeight": 0}` for dense rows. */
+  rowStyle?: Record<string, unknown>;
 }
 
 export interface FieldSpec {
@@ -84,6 +88,8 @@ export interface ScreenSpec {
   title?: string;
   /** Wrap the body in a vertical scroll view (default true). */
   scroll?: boolean;
+  /** Show the title and Back button (default true). The shell's run screen hides them. */
+  header?: boolean;
   body: NodeSpec;
   /** A floating action at the bottom of the screen. */
   footer?: NodeSpec;
@@ -149,6 +155,7 @@ export interface TextStyle {
   fontSize: number;
   fontWeight: number;
   lineHeight: number;
+  fontFamily?: "mono";
 }
 
 export const TYPOGRAPHY: Record<string, TextStyle & { color?: string }> = {

@@ -19,13 +19,16 @@ import kotlin.math.roundToInt
 object TextStyle {
     private val paints = ThreadLocal.withInitial { TextPaint(Paint.ANTI_ALIAS_FLAG) }
 
-    fun typeface(weight: Int): Typeface =
-        if (Build.VERSION.SDK_INT >= 28) Typeface.create(Typeface.DEFAULT, weight.coerceIn(1, 1000), false)
-        else if (weight >= 600) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+    /** The system font, or its monospaced variant (`fontFamily: "mono"`, the builder's code view). */
+    fun typeface(weight: Int, mono: Boolean = false): Typeface {
+        val base = if (mono) Typeface.MONOSPACE else Typeface.DEFAULT
+        return if (Build.VERSION.SDK_INT >= 28) Typeface.create(base, weight.coerceIn(1, 1000), false)
+        else if (weight >= 600) Typeface.create(base, Typeface.BOLD) else base
+    }
 
-    fun configure(paint: TextPaint, fontSize: Double, fontWeight: Int, density: Float) {
+    fun configure(paint: TextPaint, fontSize: Double, fontWeight: Int, density: Float, mono: Boolean = false) {
         paint.textSize = (fontSize * density).toFloat()
-        paint.typeface = typeface(fontWeight)
+        paint.typeface = typeface(fontWeight, mono)
     }
 
     fun layout(text: CharSequence, paint: TextPaint, lineHeightPx: Int, widthPx: Int, align: Layout.Alignment): StaticLayout {
@@ -38,9 +41,9 @@ object TextStyle {
     }
 
     /** Returns (width, height) in dp. Thread-safe: each thread uses its own paint. */
-    fun measure(text: String, fontSize: Double, fontWeight: Int, lineHeight: Double, maxWidth: Double, density: Float): Pair<Double, Double> {
+    fun measure(text: String, fontSize: Double, fontWeight: Int, lineHeight: Double, maxWidth: Double, density: Float, mono: Boolean = false): Pair<Double, Double> {
         val paint = paints.get()!!
-        configure(paint, fontSize, fontWeight, density)
+        configure(paint, fontSize, fontWeight, density, mono)
         val maxPx = (maxWidth * density).coerceAtMost(1_000_000.0).toInt()
         val layout = layout(text, paint, (lineHeight * density).roundToInt(), maxPx, Layout.Alignment.ALIGN_NORMAL)
         var width = 0f

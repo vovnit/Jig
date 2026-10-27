@@ -1,26 +1,27 @@
 import "./style.css";
-import { type AppSpec, type FrameStats, type Op, Runtime } from "@jig/core";
+import { type AppSpec, type FrameStats, type Op, Runtime, installBuilder, runningApp, seedApps, updateApp } from "@jig/core";
 import { openDatabase } from "./db.ts";
 import { DomHost } from "./host.ts";
+import shell from "../../specs/shell.json";
 import water from "../../specs/water.json";
 import chores from "../../specs/chores.json";
 import meds from "../../specs/meds.json";
 import showcase from "../../specs/showcase.json";
 
-const APPS = [water, chores, meds, showcase] as unknown as AppSpec[];
+const SEEDS = [chores, meds, showcase, water] as unknown as AppSpec[];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const surface = $<HTMLDivElement>("#surface");
 const specInput = $<HTMLTextAreaElement>("#spec");
 const specStatus = $<HTMLDivElement>("#spec-status");
 
-
 const host = new DomHost(surface);
 host.db = await openDatabase();
-const runtime = new Runtime(host);
+// The phone runs the shell, as on iOS and Android; the panels follow the app running in it.
+const runtime = new Runtime(host, { trusted: true });
 host.runtime = runtime;
-
-let current: AppSpec = APPS[0];
+// For poking at the playground from the console.
+if (import.meta.env.DEV) Object.assign(window, { jig: { runtime, host } });
 
 // ---------- Viewport ----------
 new ResizeObserver(() => runtime.setViewport(surface.clientWidth, surface.clientHeight, [12, 0, 0, 0])).observe(surface);
@@ -41,27 +42,22 @@ function applyThemeVars(): void {
   surface.style.background = runtime.theme.background;
 }
 
-// ---------- App switching ----------
-const list = $<HTMLElement>("#app-list");
-function renderList(): void {
-  list.replaceChildren(
-    ...APPS.map((app) => {
-      const b = document.createElement("button");
-      b.className = app.id === current.id ? "active" : "";
-      b.innerHTML = `${app.name}<small>${app.description ?? ""}</small>`;
-      b.onclick = () => open(app);
-      return b;
-    }),
-  );
-}
+installBuilder(runtime);
+runtime.load(shell as unknown as AppSpec, { fresh: true });
+seedApps(runtime, SEEDS);
+applyThemeVars();
 
-function open(app: AppSpec): void {
-  current = app;
-  runtime.load(app, { fresh: true });
-  applyThemeVars();
-  specInput.value = JSON.stringify(app, null, 2);
+/** The app the panels show: the one running in the shell, or the shell itself. */
+const target = () => runningApp(runtime) ?? runtime;
+let shownSpec: AppSpec | null = null;
+
+/** Shows the target's spec, unless it is already shown or being edited. */
+function showSpec(): void {
+  const spec = target().spec;
+  if (spec === shownSpec || document.activeElement === specInput) return;
+  shownSpec = spec;
+  specInput.value = JSON.stringify(spec, null, 2);
   setStatus();
-  renderList();
 }
 
 // ---------- Live editing: the spec is data, so edits apply instantly ----------
@@ -76,17 +72,19 @@ specInput.addEventListener("input", () => {
       setStatus((e as Error).message, true);
       return;
     }
-    const i = APPS.findIndex((a) => a.id === current.id);
-    current = spec;
-    if (i >= 0) APPS[i] = spec;
-    runtime.load(spec);
+    const app = runningApp(runtime);
+    // An app in the shell is changed in the shell's list, so the edit is saved with it.
+    if (app) updateApp(runtime, app.spec.id, spec);
+    else runtime.load(spec);
+    shownSpec = spec;
     applyThemeVars();
     setStatus();
   }, 250);
 });
+specInput.addEventListener("blur", showSpec);
 
 function setStatus(msg?: string, error = false): void {
-  const errs = runtime.errors;
+  const errs = target().errors;
   if (msg) specStatus.textContent = msg;
   else if (errs.length) {
     specStatus.textContent = errs.slice(0, 3).map((e) => `${e.where}: ${e.message}`).join("\n");
@@ -95,7 +93,7 @@ function setStatus(msg?: string, error = false): void {
   specStatus.classList.toggle("error", error);
 }
 
-$<HTMLButtonElement>("#reset").onclick = () => runtime.resetData();
+$<HTMLButtonElement>("#reset").onclick = () => target().resetData();
 
 // ---------- Inspector ----------
 const tabs = $<HTMLDivElement>("#tabs");
@@ -114,9 +112,11 @@ host.onApply = (ops: Op[]) => {
   const lines = ops.slice(0, 200).map((o) => JSON.stringify(o));
   if (ops.length > 200) lines.push(`… ${ops.length - 200} more`);
   opsView.textContent = `Last batch: ${ops.length} ops\n\n${lines.join("\n")}`;
+  const rt = target();
   const data: Record<string, unknown> = {};
-  for (const k of runtime.dataKeys) data[k] = runtime.secretKeys.has(k) && runtime.get(k) ? "•••• (secret)" : runtime.get(k);
+  for (const k of rt.dataKeys) data[k] = rt.secretKeys.has(k) && rt.get(k) ? "•••• (secret)" : rt.get(k);
   dataView.textContent = JSON.stringify(data, null, 2);
+  showSpec();
 };
 
 runtime.onStats = (s: FrameStats) => {
@@ -130,7 +130,7 @@ runtime.onStats = (s: FrameStats) => {
     `ops             ${s.ops}`,
     `layout cache    ${s.layoutCacheHits} hits, ${s.skippedSubtrees} subtrees skipped`,
   ].join("\n");
-  if (runtime.errors.length) setStatus();
+  if (target().errors.length) setStatus();
 };
 
-open(current);
+showSpec();

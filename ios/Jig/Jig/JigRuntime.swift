@@ -35,9 +35,10 @@ nonisolated final class JigRuntime: @unchecked Sendable {
 
     // MARK: - API (call from main)
 
-    func load(specJSON: String) {
+    /// Starts the shell; `seedsJSON` is an array of bundled app specs for its list.
+    func boot(shellJSON: String, seedsJSON: String) {
         js.async {
-            self.call("__jigLoad", specJSON)
+            self.call("__jigBoot", shellJSON, seedsJSON)
             self.publishTheme()
         }
     }
@@ -108,13 +109,13 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     private func installNative(renderer: UIKitRenderer, toggleSize: CGSize) {
         let native = JSValue(newObjectIn: context)!
 
-        let apply: @convention(block) (String, Int) -> Void = { json, navDepth in
+        let apply: @convention(block) (String) -> Void = { json in
             DispatchQueue.main.async {
-                MainActor.assumeIsolated { renderer.apply(json: json, navDepth: navDepth) }
+                MainActor.assumeIsolated { renderer.apply(json: json) }
             }
         }
-        let measure: @convention(block) (String, Double, Double, Double, Double) -> [Double] = { text, size, weight, lineHeight, maxWidth in
-            let s = TextStyle.measure(text, size: size, weight: weight, lineHeight: lineHeight, maxWidth: maxWidth)
+        let measure: @convention(block) (String, Double, Double, Double, Double, String) -> [Double] = { text, size, weight, lineHeight, maxWidth, family in
+            let s = TextStyle.measure(text, size: size, weight: weight, lineHeight: lineHeight, maxWidth: maxWidth, mono: family == "mono")
             return [Double(s.width), Double(s.height)]
         }
         let measureControl: @convention(block) (String) -> [Double] = { type in
@@ -132,6 +133,21 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         let secretSet: @convention(block) (String, String, String) -> String? = { app, key, value in SecretStore.set(app: app, key: key, value: value) }
         let secretDelete: @convention(block) (String, String) -> String? = { app, key in SecretStore.delete(app: app, key: key) }
         let secretClear: @convention(block) (String) -> String? = { app in SecretStore.clear(app: app) }
+        let call: @convention(block) (String, String, Int) -> Void = { [weak self] service, args, id in
+            guard let runtime = self else { return }
+            let resolve: @Sendable (String) -> Void = { json in runtime.js.async { runtime.call("__jigResolve", id, json) } }
+            if service == "screenshot" {
+                // A PNG of a node's view, drawn by the renderer on main.
+                let node = ((try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any])?["id"] as? Int ?? 0
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        resolve(renderer.snapshot(id: node).map { Services.result(["data": $0.base64EncodedString()]) } ?? Services.error("No view to take a picture of"))
+                    }
+                }
+                return
+            }
+            Services.handle(service, argsJSON: args, done: resolve)
+        }
         let now: @convention(block) () -> Double = { CACurrentMediaTime() * 1000 }
         let log: @convention(block) (String, String) -> Void = { level, message in NSLog("[jig] %@: %@", level, message) }
 
@@ -145,6 +161,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         native.setObject(secretSet, forKeyedSubscript: "secretSet" as NSString)
         native.setObject(secretDelete, forKeyedSubscript: "secretDelete" as NSString)
         native.setObject(secretClear, forKeyedSubscript: "secretClear" as NSString)
+        native.setObject(call, forKeyedSubscript: "call" as NSString)
         native.setObject(now, forKeyedSubscript: "now" as NSString)
         native.setObject(log, forKeyedSubscript: "log" as NSString)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)

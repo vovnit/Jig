@@ -208,14 +208,16 @@ class RowGestures(
         val tx = row.translationX
         when {
             !cancelled && tx < -width * 0.6f -> {
-                // A full swipe runs the first action.
+                // A full swipe runs the first action. Run it now rather than when the slide ends:
+                // another animation on the row (its fade-out) would cancel that end action.
                 row.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                row.animate().translationX(-width).setDuration(200).setInterpolator(ease).withEndAction {
+                dispatch(id, "swipe", JSONObject().put("index", 0))
+                row.animate().translationX(-width).setDuration(200).setInterpolator(ease)
+                row.postDelayed({
                     (panel.parent as? ViewGroup)?.removeView(panel)
-                    dispatch(id, "swipe", JSONObject().put("index", 0))
                     // If the action kept the row, bring it back.
-                    row.animate().translationX(0f).setDuration(220).setInterpolator(ease)
-                }
+                    if (row.isAttachedToWindow && row.isEnabled) row.animate().translationX(0f).setDuration(220).setInterpolator(ease)
+                }, 260)
             }
             !cancelled && tx < -actionsWidth / 2 -> {
                 open = Triple(row, panel, actionsWidth)
@@ -232,6 +234,7 @@ class RowGestures(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.END
         }
+        // The first action is outermost, as a full swipe runs it (as in Mail).
         (actions[id] ?: emptyList()).forEachIndexed { index, a ->
             panel.addView(TextView(row.context).apply {
                 text = a.label
@@ -247,7 +250,7 @@ class RowGestures(
                     dispatch(id, "swipe", JSONObject().put("index", index))
                     close()
                 }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }, 0, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
         val body = row.parent as ViewGroup
         body.addView(panel, body.indexOfChild(row), FrameParams())

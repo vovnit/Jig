@@ -12,9 +12,9 @@ import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "
 import { DataStore } from "./store.ts";
 import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ListSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
-const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "props"]);
+const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "onPage", "onSelect", "props", "$path"]);
 const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
-const TEXT_METRIC_KEYS = ["fontSize", "fontWeight", "lineHeight"] as const;
+const TEXT_METRIC_KEYS = ["fontSize", "fontWeight", "lineHeight", "fontFamily"] as const;
 
 interface NavEntry {
   screen: string;
@@ -29,6 +29,8 @@ interface Handlers {
   onTap?: Actions;
   onChange?: Actions;
   onSubmit?: Actions;
+  /** A paging hscroll settled on a page (`value` is its index). */
+  onPage?: Actions;
   bind?: string;
   /** List rows: a swipe action by index, and a drag past a neighbour (by -1 or 1). */
   onSwipe?: (index: number) => void;
@@ -87,6 +89,29 @@ export interface FrameStats {
   ops: number;
 }
 
+export interface RuntimeOptions {
+  /** Renders inside another runtime's `app` node instead of on the host's surface. */
+  embedded?: boolean;
+  /** The shell: may call the builder's services. Set by the host, never by a spec. */
+  trusted?: boolean;
+}
+
+/** An app shown inside an `app` node: its own runtime, laid out at the node's size. */
+interface Embedded {
+  node: ViewNode;
+  rt: Runtime;
+  /** Frame callbacks the child asked for; run during the parent's frame. */
+  frames: (() => void)[];
+  /** The child's ops, sent in the parent's batch. */
+  ops: Op[];
+  flushed: boolean;
+  attached: boolean;
+  scale: number;
+  interactive: boolean;
+  size: [number, number] | null;
+  spec: unknown;
+}
+
 export interface RuntimeError {
   where: string;
   message: string;
@@ -134,6 +159,16 @@ export class Runtime {
   stats: FrameStats = emptyStats();
   onStats?: (s: FrameStats) => void;
 
+  readonly embedded: boolean;
+  readonly trusted: boolean;
+  /** Container services the trusted shell calls with `{"call": name, "args": {...}}`. */
+  services = new Map<string, (args: Record<string, unknown>) => void>();
+  private embeds = new Set<Embedded>();
+  /** Set for a whiteboard card: the app shows this screen and doesn't navigate. */
+  private pinned: string | null = null;
+  /** Navigation depth last reported to the host. */
+  private reportedDepth = 0;
+
   private structural: Op[] = [];
   private updates = new Map<ViewNode, Props>();
   private frameRequested = false;
@@ -145,9 +180,12 @@ export class Runtime {
   private textCache = new Map<string, Size>();
   private globalScope: Scope;
 
-  constructor(host: Host) {
+  constructor(host: Host, options: RuntimeOptions = {}) {
     this.host = host;
-    this.root = this.createNode("root");
+    this.embedded = options.embedded ?? false;
+    this.trusted = options.trusted ?? false;
+    // An embedded app's root is an ordinary container inside the parent's `app` node.
+    this.root = this.createNode(this.embedded ? "column" : "root");
     this.mount(this.root);
     const signals = this.signals;
     this.globalScope = {
@@ -167,8 +205,9 @@ export class Runtime {
    * Loads (or hot-reloads) a spec. On a hot reload, state of keys that survive the
    * edit and the navigation stack are kept; `fresh` starts a different app clean.
    */
-  load(spec: AppSpec, { fresh = false } = {}): void {
+  load(spec: AppSpec, { fresh = false, screen }: { fresh?: boolean; screen?: string } = {}): void {
     this.appOwner?.dispose();
+    this.pinned = screen && spec.screens[screen] ? screen : null;
     if (fresh || this.spec?.id !== spec.id) this.savedSecrets.clear();
     if (fresh) {
       this.signals.clear();
@@ -195,8 +234,8 @@ export class Runtime {
     this.signals.clear();
     for (const [k, s] of next) this.signals.set(k, s);
 
-    const start = spec.start && spec.screens[spec.start] ? spec.start : Object.keys(spec.screens)[0];
-    const keepNav = this.nav.peek().filter((e) => spec.screens[e.screen]);
+    const start = this.pinned ?? (spec.start && spec.screens[spec.start] ? spec.start : Object.keys(spec.screens)[0]);
+    const keepNav = this.pinned ? [] : this.nav.peek().filter((e) => spec.screens[e.screen]);
     this.nav.set(keepNav.length ? keepNav : [{ screen: start, params: {} }]);
 
     // A (hot) reload replaces the screen in place; only navigation animates.
@@ -220,7 +259,25 @@ export class Runtime {
   setColorScheme(scheme: ColorScheme): void {
     if (scheme === this.colorScheme) return;
     this.colorScheme = scheme;
-    if (this.spec) this.load(this.spec);
+    for (const e of this.embeds) e.rt.setColorScheme(scheme);
+    if (this.spec) this.load(this.spec, { screen: this.pinned ?? undefined });
+  }
+
+  /** Tears the app down: an embedded app whose `app` node went away. */
+  dispose(): void {
+    this.screenOwner?.();
+    this.screenOwner = null;
+    this.appOwner?.dispose();
+    this.appOwner = null;
+    for (const e of this.embeds) e.rt.dispose();
+    this.embeds.clear();
+  }
+
+  /** Whether a node belongs to this runtime or an app embedded in it. */
+  owns(id: number): boolean {
+    if (this.nodes.has(id)) return true;
+    for (const e of this.embeds) if (e.rt.owns(id)) return true;
+    return false;
   }
 
   setViewport(width: number, height: number, insets: [number, number, number, number] = [0, 0, 0, 0]): void {
@@ -233,7 +290,14 @@ export class Runtime {
   dispatch(id: number, name: string, payload: Record<string, unknown> = {}): void {
     const t0 = now(this.host);
     const node = this.nodes.get(id);
-    if (!node) return;
+    if (!node) {
+      for (const e of this.embeds) if (e.rt.owns(id)) return e.rt.dispatch(id, name, payload);
+      return;
+    }
+    if (name === "select") {
+      this.select(node);
+      return;
+    }
     if (name === "scroll") {
       this.scrollOffsets.set(id, Number(payload.y) || 0);
       if (this.lists.size) this.scheduleFrame();
@@ -262,14 +326,19 @@ export class Runtime {
         if (h.onChange) this.run(h.onChange, childScope(h.scope, { value }));
       }
       if (name === "submit" && h.onSubmit) this.run(h.onSubmit, h.scope);
+      if (name === "page" && h.onPage) this.run(h.onPage, childScope(h.scope, { value: Number(payload.index) || 0 }));
       if (name === "swipe" && h.onSwipe) h.onSwipe(Number(payload.index) || 0);
       if (name === "move" && h.onMove) h.onMove(Math.sign(Number(payload.by) || 0));
     }
     this.stats.bindingsMs += now(this.host) - t0;
   }
 
-  /** Pops one screen, for the host's back gesture or button. Returns false on the first screen. */
+  /**
+   * Pops one screen, for the host's back gesture or button: an embedded app's own screens
+   * first, then this runtime's. Returns false on the first screen.
+   */
   back(): boolean {
+    for (const e of [...this.embeds].reverse()) if (e.interactive && e.node.mounted && e.rt.back()) return true;
     const stack = this.nav.peek();
     if (stack.length <= 1) return false;
     this.nav.set(stack.slice(0, -1));
@@ -299,6 +368,7 @@ export class Runtime {
       }
       if (!this.updateWindows()) break;
     }
+    for (const e of this.embeds) this.syncEmbed(e);
     this.stats.layoutMs += now(this.host) - t0 - this.stats.measureMs;
     this.stats.layoutCacheHits += ctx.stats.cacheHits;
     this.stats.skippedSubtrees += ctx.stats.skipped;
@@ -313,6 +383,22 @@ export class Runtime {
 
     const ops: Op[] = this.structural;
     this.structural = [];
+    // Embedded apps' ops come after the parent's structure (their `app` nodes exist by then),
+    // and each child's root is attached once it was created.
+    for (const e of this.embeds) {
+      ops.push(...e.ops);
+      e.ops = [];
+      if (e.flushed && !e.attached && e.node.mounted) {
+        ops.push(["insert", e.node.id, e.rt.root.id, 0]);
+        e.attached = true;
+      }
+    }
+    const depth = this.nav.peek().length;
+    if (depth !== this.reportedDepth) {
+      // Hosts keep a screen stack per runtime root, for the back gesture.
+      ops.push(["command", this.root.id, "depth", [depth]]);
+      this.reportedDepth = depth;
+    }
     for (const [node, props] of this.updates) if (node.alive && node.mounted) ops.push(["update", node.id, props]);
     this.updates.clear();
     for (const [n, f] of frames) if (n.alive && n.mounted) ops.push(["frame", n.id, ...f]);
@@ -324,6 +410,9 @@ export class Runtime {
     }
     this.stats.ops += ops.length;
     if (this.saveRequested) this.save();
+    const waiters = this.frameWaiters;
+    this.frameWaiters = [];
+    for (const w of waiters) w();
     const done = this.stats;
     this.stats = emptyStats();
     this.onStats?.(done);
@@ -366,16 +455,16 @@ export class Runtime {
     }
     root((dispose) => {
       this.screenOwner = dispose;
-      const node = this.buildNode(this.screenSpec(screen), this.globalScope, `screens.${name}`);
+      const node = this.buildNode(this.screenSpec(screen, name), this.globalScope, `screens.${name}~`);
       this.setChildren(this.root, [node]);
     }, this.appOwner);
     this.scheduleFrame();
   }
 
-  private screenSpec(screen: ScreenSpec): NodeSpec {
+  private screenSpec(screen: ScreenSpec, name: string): NodeSpec {
     const children: NodeSpec[] = [];
     const canGoBack = this.nav.peek().length > 1;
-    if (screen.title || canGoBack) {
+    if (screen.header !== false && (screen.title || canGoBack)) {
       children.push({
         type: "column",
         style: { paddingX: 20, paddingTop: 8, paddingBottom: 8, gap: 2, align: "start" },
@@ -385,9 +474,10 @@ export class Runtime {
         ],
       });
     }
-    if (screen.scroll === false) children.push({ ...screen.body, style: { grow: 1, ...(screen.body.style ?? {}) } });
-    else children.push({ type: "scroll", style: { grow: 1, paddingX: 20, paddingTop: 8, paddingBottom: 32 }, children: [screen.body] });
-    if (screen.footer) children.push({ type: "column", style: { paddingX: 20, paddingY: 12 }, children: [screen.footer] });
+    const body = { ...screen.body, $path: `screens.${name}.body` };
+    if (screen.scroll === false) children.push({ ...body, style: { grow: 1, ...(screen.body.style ?? {}) } });
+    else children.push({ type: "scroll", style: { grow: 1, paddingX: 20, paddingTop: 8, paddingBottom: 32 }, children: [body] });
+    if (screen.footer) children.push({ type: "column", style: { paddingX: 20, paddingY: 12 }, children: [{ ...screen.footer, $path: `screens.${name}.footer` }] });
     return { type: "screen", style: { background: "background", height: "100%" }, children };
   }
 
@@ -396,13 +486,23 @@ export class Runtime {
   private createNode(type: string): ViewNode {
     const n = new ViewNode(type);
     this.nodes.set(n.id, n);
-    if (type === "scroll" || type === "hscroll") this.scrollNodes.add(n);
+    if (type === "scroll" || type === "hscroll" || type === "canvas") this.scrollNodes.add(n);
     return n;
   }
 
   private buildNode(spec: NodeSpec, scope: Scope, where: string): ViewNode {
+    // A node from the app's spec knows where it came from, so the builder can select it.
+    if (typeof spec.$path === "string") where = spec.$path;
+    const node = this.buildNodeAt(spec, scope, where);
+    node.path = specPath(where);
+    if (node.path && node.path === this.selectedPath) this.markSelected(node);
+    return node;
+  }
+
+  private buildNodeAt(spec: NodeSpec, scope: Scope, where: string): ViewNode {
     const type = TYPE_ALIASES[spec.type] ?? spec.type;
     if (type === "list") return this.buildList(spec as ListSpec, scope, where);
+    if (type === "app") return this.buildApp(spec, scope, where);
     const component = this.components[type];
     if (component && !isPrimitive(type)) return this.buildComponent(spec, component, scope, where);
     return this.buildPrimitive(type, spec, [{ style: spec.style, scope }], scope, where);
@@ -429,8 +529,9 @@ export class Runtime {
     const type = TYPE_ALIASES[tmpl.type] ?? tmpl.type;
     const merged: NodeSpec = { ...tmpl, onTap: usage.onTap ?? tmpl.onTap, bind: usage.bind ?? tmpl.bind };
     // Usage children fill a template's "$children" slot, evaluated in the caller's scope.
+    // They are the app's own nodes; the template's are internal (`~` in their path).
     const slotChildren = (tmpl.children as unknown) === "$children";
-    if (slotChildren) merged.children = usage.children ?? [];
+    if (slotChildren) merged.children = (usage.children ?? []).map((c, i) => ({ ...c, $path: `${where}.children[${i}]` }));
     const node = this.buildPrimitive(
       type,
       merged,
@@ -439,7 +540,7 @@ export class Runtime {
         { style: usage.style, scope: callerScope },
       ],
       slotChildren ? callerScope : scope,
-      where,
+      `${where}~`,
       scope,
       usage.onTap ? callerScope : scope,
     );
@@ -486,6 +587,7 @@ export class Runtime {
     if (spec.onTap) h.onTap = spec.onTap;
     if (spec.onChange) h.onChange = spec.onChange;
     if (spec.onSubmit) h.onSubmit = spec.onSubmit;
+    if (spec.onPage) h.onPage = spec.onPage as Actions;
     if (spec.bind) {
       h.bind = spec.bind;
       const target = spec.bind;
@@ -498,7 +600,7 @@ export class Runtime {
         });
       });
     }
-    if (h.onTap || h.onChange || h.onSubmit || h.bind) {
+    if (h.onTap || h.onChange || h.onSubmit || h.onPage || h.bind) {
       this.handlers.set(node.id, h);
       if (h.onTap && type !== "button") node.props.tappable = true;
     }
@@ -599,6 +701,152 @@ export class Runtime {
     return slot;
   }
 
+  // ---------- Selection (the builder's select mode) ----------
+
+  /** The spec path of the selected node; it stays selected across hot reloads. */
+  selectedPath: string | null = null;
+  private selectedNode: ViewNode | null = null;
+  onSelect?: (info: { path: string; pointer: string; type: string; text?: string } | null) => void;
+
+  /** Selects the app's node at or above a touched view: builtin internals select their usage. */
+  private select(node: ViewNode): void {
+    let n: ViewNode | null = node;
+    while (n && !n.path) n = n.parent;
+    if (!n) return;
+    this.markSelected(n);
+    this.selectedPath = n.path;
+    const text = n.props.value ?? n.props.label ?? n.props.placeholder;
+    this.onSelect?.({ path: n.path!, pointer: toPointer(n.path!), type: n.type, text: typeof text === "string" ? text : undefined });
+  }
+
+  private markSelected(node: ViewNode): void {
+    if (this.selectedNode && this.selectedNode !== node && this.selectedNode.alive) this.setProp(this.selectedNode, "selected", false);
+    this.selectedNode = node;
+    if (node.mounted) this.setProp(node, "selected", true);
+    else node.props.selected = true;
+  }
+
+  clearSelection(): void {
+    if (this.selectedNode?.alive) this.setProp(this.selectedNode, "selected", false);
+    this.selectedNode = null;
+    this.selectedPath = null;
+  }
+
+  // ---------- Embedded apps ----------
+
+  /**
+   * `{"type": "app", "spec": "{{app.spec}}"}`: another app, running in its own runtime inside
+   * this node. `screen` pins it to one screen, `scale` draws it smaller (a whiteboard card lays
+   * out at phone size and shows at card size), `interactive: false` makes it a picture.
+   */
+  private buildApp(spec: NodeSpec, scope: Scope, where: string): ViewNode {
+    const node = this.buildPrimitive("app", { type: "app" }, [{ style: spec.style, scope }], scope, where);
+    const e: Embedded = { node, rt: null!, frames: [], ops: [], flushed: false, attached: false, scale: 1, interactive: true, size: null, spec: null };
+    const child: Host = {
+      apply: (ops) => {
+        e.flushed = true;
+        e.ops.push(...ops);
+      },
+      measureText: (text, style, maxWidth) => this.host.measureText(text, style, maxWidth),
+      measureControl: this.host.measureControl && ((type) => this.host.measureControl!(type)),
+      requestFrame: (cb) => {
+        e.frames.push(cb);
+        this.scheduleFrame();
+      },
+      db: this.host.db,
+      secrets: this.host.secrets,
+      now: this.host.now && (() => this.host.now!()),
+      log: this.host.log && ((level, message) => this.host.log!(level, message)),
+    };
+    e.rt = new Runtime(child, { embedded: true });
+    e.rt.colorScheme = this.colorScheme;
+    if (spec.onSelect) e.rt.onSelect = (info) => this.run(spec.onSelect as Actions, childScope(scope, { value: info }));
+    this.embeds.add(e);
+    onCleanup(() => {
+      this.embeds.delete(e);
+      e.rt.dispose();
+    });
+    effect(() => {
+      const value = typeof spec.spec === "string" ? this.evalTemplate(spec.spec, scope, `${where}.spec`) : spec.spec;
+      const screen = typeof spec.screen === "string" ? str(this.evalTemplate(spec.screen, scope, `${where}.screen`)) : undefined;
+      const scale = Number(typeof spec.scale === "string" ? this.evalTemplate(spec.scale, scope, `${where}.scale`) : (spec.scale ?? 1)) || 1;
+      const interactive = (typeof spec.interactive === "string" ? this.evalTemplate(spec.interactive, scope, `${where}.interactive`) : spec.interactive) !== false;
+      const selecting = Boolean(typeof spec.selecting === "string" ? this.evalTemplate(spec.selecting, scope, `${where}.selecting`) : spec.selecting);
+      untrack(() => {
+        e.interactive = interactive;
+        this.setProp(node, "interactive", interactive);
+        // Select mode: the host sends taps inside the app as `select` instead of running them.
+        this.setProp(node, "selecting", selecting);
+        if (!selecting && e.rt.selectedPath) e.rt.clearSelection();
+        if (scale !== e.scale) {
+          e.scale = scale;
+          e.size = null;
+          this.setProp(node, "contentScale", scale);
+        }
+        let app = value;
+        if (typeof app === "string") {
+          try {
+            app = JSON.parse(app);
+          } catch (err) {
+            return this.error(`${where}.spec`, (err as Error).message);
+          }
+        }
+        if (!app || typeof app !== "object" || !(app as AppSpec).screens) return;
+        // The same spec again (another app in the list changed): keep the running one as it is.
+        if (app === e.spec && (screen ?? null) === e.rt.pinned) return;
+        const fresh = (app as AppSpec).id !== e.rt.spec?.id;
+        e.spec = app;
+        e.rt.load(app as AppSpec, { fresh, screen });
+        // The child reports its errors too, so the builder can show and repair them.
+        if (e.rt.errors.length) for (const er of e.rt.errors) this.error(`${where} ${er.where}`, er.message);
+      });
+    });
+    return node;
+  }
+
+  /** After the parent's layout: give the child its viewport, then run its frame. */
+  private syncEmbed(e: Embedded): void {
+    if (!e.node.mounted) return;
+    const [, , w, h] = e.node.frame;
+    // Frames snap to quarter points, so a scaled card's viewport is rounded back to whole ones.
+    const vw = e.scale === 1 ? w : Math.round(w / e.scale);
+    const vh = e.scale === 1 ? h : Math.round(h / e.scale);
+    if (!e.size || e.size[0] !== vw || e.size[1] !== vh) {
+      e.size = [vw, vh];
+      e.rt.setViewport(vw, vh);
+    }
+    const frames = e.frames;
+    e.frames = [];
+    for (const cb of frames) cb();
+  }
+
+  /** A host service as a promise (see `Host.call`). */
+  hostCall<T = Record<string, unknown>>(service: string, args: Record<string, unknown> = {}): Promise<T> {
+    const call = this.host.call;
+    if (!this.trusted || !call) return Promise.reject(new Error(`The host has no '${service}' service`));
+    return new Promise((resolve, reject) => call.call(this.host, service, args, (result, error) => (error ? reject(new Error(error)) : resolve(result as T))));
+  }
+
+  /** The apps embedded in this runtime, for hosts and the builder. */
+  get children(): Runtime[] {
+    return [...this.embeds].map((e) => e.rt);
+  }
+
+  /** Embedded apps on screen, with the screen each one is pinned to (whiteboard cards, pager pages). */
+  embeddedViews(): { rt: Runtime; node: ViewNode; screen: string | null }[] {
+    return [...this.embeds].filter((e) => e.node.mounted && e.attached).map((e) => ({ rt: e.rt, node: e.node, screen: e.rt.pinned }));
+  }
+
+  private frameWaiters: (() => void)[] = [];
+
+  /** Resolves after the next frame was sent to the host (JS engines here have no timers). */
+  nextFrame(): Promise<void> {
+    return new Promise((resolve) => {
+      this.frameWaiters.push(resolve);
+      this.scheduleFrame();
+    });
+  }
+
   // ---------- Lists ----------
 
   private buildList(spec: ListSpec, scope: Scope, where: string): ViewNode {
@@ -614,7 +862,7 @@ export class Runtime {
         style: { background: inset ? "surface" : "background", transition: 200 },
         onTap: spec.onTap,
         children: [
-          { type: "column", style: { paddingX: pad, paddingY: 11, minHeight: 44, justify: "center" }, children: spec.row ? [spec.row] : [] },
+          { type: "column", style: { paddingX: pad, paddingY: 11, minHeight: 44, justify: "center", ...spec.rowStyle }, children: spec.row ? [{ ...spec.row, $path: `${where}.row` }] : [] },
           ...(spec.separators === false ? [] : [{ type: "divider", if: "!$last", style: { marginLeft: pad, height: 0.5 } }]),
         ],
       },
@@ -647,8 +895,8 @@ export class Runtime {
 
     const caption = (value: string, w: string) =>
       this.buildNode({ type: "text", variant: "caption", value, style: { paddingX: pad } }, scope, w);
-    const header = spec.header ? caption(spec.header, `${where}.header`) : null;
-    const footer = spec.footer ? caption(spec.footer, `${where}.footer`) : null;
+    const header = spec.header ? caption(spec.header, `${where}~header`) : null;
+    const footer = spec.footer ? caption(spec.footer, `${where}~footer`) : null;
     let empty: ViewNode | null = null;
     let disposeEmpty: (() => void) | null = null;
     const refresh = () => this.setChildren(outer, [header, body, empty, footer].filter((n): n is ViewNode => n !== null));
@@ -671,8 +919,8 @@ export class Runtime {
               disposeEmpty = d;
               const e = spec.empty!;
               return typeof e === "string"
-                ? this.buildNode({ type: "text", variant: "callout", value: e, style: { color: "muted", paddingX: pad, paddingY: 8 } }, scope, `${where}.empty`)
-                : this.buildNode(e, scope, `${where}.empty`);
+                ? this.buildNode({ type: "text", variant: "callout", value: e, style: { color: "muted", paddingX: pad, paddingY: 8 } }, scope, `${where}~empty`)
+                : this.buildNode({ ...e, $path: `${where}.empty` }, scope, `${where}.empty`);
             }, owner)
           : null;
         refresh();
@@ -751,7 +999,7 @@ export class Runtime {
     Object.defineProperty(vars, "$last", { enumerable: true, get: () => index.get() === L.count.get() - 1 });
     const scope = childScope(L.scope, vars);
     return root((dispose) => {
-      const node = this.buildNode(L.rowSpec, scope, `${L.where}.row`);
+      const node = this.buildNode(L.rowSpec, scope, `${L.where}~row`);
       const h: Handlers = this.handlers.get(node.id) ?? { scope };
       const swipe = Array.isArray(spec.swipe) ? spec.swipe : [];
       if (swipe.length) {
@@ -918,6 +1166,7 @@ export class Runtime {
       const base = TYPOGRAPHY[variant] ?? TYPOGRAPHY.body;
       const fontSize = Number(visual.fontSize ?? base.fontSize);
       const ts: TextStyle = {
+        ...(visual.fontFamily === "mono" ? { fontFamily: "mono" as const } : {}),
         fontSize,
         fontWeight: Number(fontWeightOf(visual.fontWeight) ?? base.fontWeight),
         lineHeight: Number(visual.lineHeight ?? (visual.fontSize !== undefined ? Math.round(fontSize * 1.3) : base.lineHeight)),
@@ -1069,7 +1318,7 @@ export class Runtime {
     if (!text) return { width: 0, height: 0 };
     const ts = this.textStyles.get(n) ?? TYPOGRAPHY.body;
     const w = isFinite(maxW) ? Math.floor(maxW) : 100000;
-    const k = `${ts.fontSize}|${ts.fontWeight}|${ts.lineHeight}|${w}|${text}`;
+    const k = `${ts.fontFamily ?? ""}|${ts.fontSize}|${ts.fontWeight}|${ts.lineHeight}|${w}|${text}`;
     const hit = this.textCache.get(k);
     if (hit) {
       this.stats.measureCacheHits++;
@@ -1160,12 +1409,19 @@ export class Runtime {
         const params: Record<string, unknown> = {};
         for (const [k, v] of Object.entries(a.params ?? {})) params[k] = this.evalValue(v, scope, where);
         if (!this.spec.screens[a.navigate]) return this.error(where, `Unknown screen '${a.navigate}'`);
+        if (this.pinned) return;
         this.nav.set([...this.nav.peek(), { screen: a.navigate, params, transition: a.transition }]);
       } else if ("back" in a) {
         this.back();
       } else if ("if" in a) {
         const branch = this.evalExpr(a.if, scope, where) ? a.then : a.else;
         if (branch) this.run(branch, scope);
+      } else if ("call" in a) {
+        // Container services act outside the app: only the shell may use them.
+        if (!this.trusted) return this.error(where, "Only the shell can call services");
+        const service = this.services.get(a.call);
+        if (!service) return this.error(where, `Unknown service '${a.call}'`);
+        service((this.evalValue(a.args ?? {}, scope, where) ?? {}) as Record<string, unknown>);
       } else this.error(where, "Unknown action");
     } catch (e) {
       this.error(where, (e as Error).message);
@@ -1312,7 +1568,7 @@ export class Runtime {
   }
 }
 
-const PRIMITIVES = new Set(["root", "screen", "column", "row", "overlay", "scroll", "hscroll", "list", "text", "button", "textfield", "toggle", "shape", "image", "spacer", "divider"]);
+const PRIMITIVES = new Set(["root", "screen", "column", "row", "overlay", "scroll", "hscroll", "list", "app", "text", "button", "textfield", "toggle", "shape", "image", "spacer", "divider"]);
 const isPrimitive = (t: string) => PRIMITIVES.has(t);
 export const PRIMITIVE_TYPES = [...PRIMITIVES].filter((t) => t !== "root" && t !== "screen");
 
@@ -1336,6 +1592,17 @@ function normalizeTransition(t: unknown): { duration: number; easing: string } |
     return duration > 0 ? { duration, easing } : null;
   }
   return null;
+}
+
+/** The spec path of a node built from the app's spec, or null for the runtime's own nodes. */
+function specPath(where: string): string | null {
+  if (where.includes("~")) return null;
+  return /^screens\.[^.]+\.(body|footer)/.test(where) || where.startsWith("components.") ? where : null;
+}
+
+/** `screens.main.body.children[1].row` → `/screens/main/body/children/1/row` (a JSON Pointer). */
+function toPointer(path: string): string {
+  return "/" + path.replace(/\[(\d+)\]/g, ".$1").split(".").map((k) => k.replace(/~/g, "~0").replace(/\//g, "~1")).join("/");
 }
 
 function hasRemove(actions: Actions | undefined): boolean {

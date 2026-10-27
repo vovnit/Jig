@@ -167,8 +167,9 @@ final class RowGestures: NSObject, UIGestureRecognizerDelegate {
     private func makePanel(id: Int, row: UIView) -> UIView {
         let panel = UIView(frame: untransformedFrame(row))
         panel.clipsToBounds = true
+        // The first action is outermost, as a full swipe runs it (as in Mail).
         var x = panel.bounds.width
-        for (index, a) in (actions[id] ?? []).enumerated().reversed() {
+        for (index, a) in (actions[id] ?? []).enumerated() {
             let b = UIButton(type: .system)
             b.setTitle(a.label, for: .normal)
             b.setTitleColor(.white, for: .normal)

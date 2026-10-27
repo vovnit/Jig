@@ -29,6 +29,8 @@ export interface TextMeasureStyle {
   fontSize: number;
   fontWeight: number;
   lineHeight: number;
+  /** "mono": the platform's monospaced system font (the builder's code view). */
+  fontFamily?: "mono";
 }
 
 export interface Size {
@@ -71,6 +73,14 @@ export interface Host {
   secrets?: SecretStore;
   now?(): number;
   log?(level: "info" | "warn" | "error", message: string): void;
+  /**
+   * Starts an asynchronous host service and calls `done` with its result (on the runtime's
+   * thread) or an error message. Only the trusted shell reaches it. Services:
+   * - `http` {url, method?, headers?, body?} → {status, body}
+   * - `audio.start` {} → {}, `audio.stop` {} → {data: base64 WAV, mono 16 kHz}
+   * - `screenshot` {id} → {data: base64 PNG of that node's view}
+   */
+  call?(service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void): void;
 }
 
 /**

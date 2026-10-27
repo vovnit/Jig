@@ -47,11 +47,21 @@ final class JigButton: UIButton {
 }
 
 /// Scroll views keep runtime children in a content view: UIScrollView's own
-/// subviews (indicators) would otherwise shift child indexes.
-final class JigScrollView: UIScrollView {
+/// subviews (indicators) would otherwise shift child indexes. A canvas (the builder's
+/// whiteboard) also zooms; a paging hscroll reports the page it settles on.
+final class JigScrollView: UIScrollView, UIScrollViewDelegate {
     let content = UIView()
     /// Set when a long list inside needs the scroll offset.
     var onScroll: ((CGFloat) -> Void)?
+    /// Set on a paging hscroll: called with the page index after a swipe settles.
+    var onPage: ((Int) -> Void)?
+    var zoomable = false {
+        didSet {
+            minimumZoomScale = zoomable ? 0.3 : 1
+            maximumZoomScale = zoomable ? 2.5 : 1
+        }
+    }
+    private var size = CGSize.zero
 
     override var contentOffset: CGPoint {
         didSet { if contentOffset.y != oldValue.y { onScroll?(contentOffset.y) } }
@@ -63,13 +73,35 @@ final class JigScrollView: UIScrollView {
         alwaysBounceVertical = true
         keyboardDismissMode = .interactive
         contentInsetAdjustmentBehavior = .never
+        delegate = self
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     func setContentSize(_ size: CGSize) {
-        content.frame = CGRect(origin: .zero, size: size)
-        contentSize = size
+        self.size = size
+        // Zoomed, the content view is scaled: keep its layout size and scale the scroll size.
+        content.bounds = CGRect(origin: .zero, size: size)
+        content.center = CGPoint(x: size.width * zoomScale / 2, y: size.height * zoomScale / 2)
+        contentSize = CGSize(width: size.width * zoomScale, height: size.height * zoomScale)
+    }
+
+    func viewForZooming(in scrollView: UIScrollView) -> UIView? { zoomable ? content : nil }
+
+    func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { reportPage() }
+
+    func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+        if !decelerate { reportPage() }
+    }
+
+    private func reportPage() {
+        guard isPagingEnabled, bounds.width > 0 else { return }
+        onPage?(Int((contentOffset.x / bounds.width).rounded()))
+    }
+
+    func show(page: Int, animated: Bool) {
+        let x = CGFloat(page) * bounds.width
+        if abs(contentOffset.x - x) > 1 { setContentOffset(CGPoint(x: x, y: 0), animated: animated) }
     }
 }
 
