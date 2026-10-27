@@ -94,7 +94,7 @@ A spec has `data` (typed and persisted), `state` (transient UI state), `screens`
 }
 ```
 
-- **Primitives:** `column`, `row`, `overlay`, `scroll`, `text`, `button`, `textfield`, `toggle`, `shape`, `image`, `spacer`, `divider`.
+- **Primitives:** `column`, `row`, `overlay`, `scroll`, `list`, `text`, `button`, `textfield`, `toggle`, `shape`, `image`, `spacer`, `divider`.
 - **Built-in composites** (written in the spec format itself): `card`, `progress`, `ring`, `check`.
 - **Structure:** `if`, `each` / `as` / `key`, `bind` for two-way control values.
 - **Actions:** `set`, `toggle`, `push`, `remove`, `navigate` (with params), `back`, `if` / `then` / `else`. Actions run in order, and each sees the state the previous one wrote.
@@ -118,6 +118,24 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 ```json
 "data": { "apiKey": { "type": "string", "secret": true } }
 ```
+
+### Lists
+
+`list` renders items as native-looking rows: an inset card with hairline separators (or full-width rows with `"variant": "plain"`), an optional `header` and `footer`, and an `empty` state.
+
+```json
+{
+  "type": "list", "items": "chores", "as": "chore", "reorder": true,
+  "onTap": { "toggle": "chore.done" },
+  "swipe": [{ "label": "Delete", "do": { "remove": "chore" } }],
+  "row": { "type": "text", "value": "{{chore.name}}" }
+}
+```
+
+- **Virtualized.** A list of up to 60 items has a row for every item. A longer one only builds rows for the visible part and one screen around it; the other items are stacked by their measured (or estimated) height, so the scroll bar is right. Rows that scroll into or out of that window come and go without the fade of a new or deleted item (`quiet` on `insert` / `remove`). The scroll view a long list sits in reports its offset (`scroll` events), and the runtime moves the window when the visible part gets near its edge. A 10,000-item list costs about a millisecond per scroll frame in the runtime.
+- **Swipe actions.** Swiping a row left reveals its actions; a full swipe runs the first. Actions that remove default to the danger color.
+- **Reorder.** Long-press a row and drag it. The host reports each neighbour the row passes (`move` by -1 or 1), the runtime reorders the data and lays out again, and the other rows animate into place while the dragged one stays under the finger; near the edge of the screen, the list scrolls. Reordering writes the list back, so `items` must be a data path (`chores`), not a sorted view.
+- Each row has `as` (default `item`), `indexAs` (default `index`) and `$last` in scope.
 
 ### Node kinds
 
@@ -182,7 +200,7 @@ Built in from the start:
 After profiling, if needed:
 - A binary bridge: frames in a `Float32Array`, ops as numeric codes, strings stored once in a table.
 - Batched measurement before layout.
-- A native view pool by type, and virtualization for long lists.
+- A native view pool by type, so rows scrolling into a long list reuse views instead of creating them.
 - Hermes or QuickJS bytecode for faster startup (JavaScriptCore runs without JIT inside an iOS app).
 - One runtime shared by all mini apps, and a cache of the last frame on disk so an app opens instantly.
 - Long term: if every host bundled one font, JS could break lines itself from a glyph width table, with native measurement only for emoji and complex scripts.
@@ -193,6 +211,7 @@ After profiling, if needed:
 - [x] Spec format: screens, components, data schema, actions
 - [ ] JSON Schema for spec validation
 - [x] JS runtime: state, bindings with targeted updates, keyed list diffing, batched ops
+- [x] Lists: virtualized rows, swipe actions, drag to reorder, inset and plain styles
 - [x] Flex layout in JS: measure interface, dirty flags, measurement cache
 - [x] Loop phase timers for profiling
 - [x] Web host (DOM) and playground with live spec editing

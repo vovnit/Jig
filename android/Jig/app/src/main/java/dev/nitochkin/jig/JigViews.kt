@@ -16,6 +16,7 @@ import android.graphics.RectF
 import android.text.Layout
 import android.text.StaticLayout
 import android.text.TextPaint
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
@@ -37,6 +38,28 @@ class JigLayout(context: Context) : ViewGroup(context) {
     /** Size when the parent leaves it open (the content of a scroll view). */
     var contentWidth = 0
     var contentHeight = 0
+    /** Set on list rows: swipe actions and drag-to-reorder. */
+    var rowGestures: RowGestures? = null
+
+    override fun onInterceptTouchEvent(ev: MotionEvent) = rowGestures?.intercept(this, ev) ?: false
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(ev: MotionEvent): Boolean {
+        val g = rowGestures ?: return super.onTouchEvent(ev)
+        // While a swipe or drag owns the touch, the row's own press and click don't see it.
+        if (g.active(this)) {
+            g.touch(this, ev)
+            return true
+        }
+        super.onTouchEvent(ev)
+        g.touch(this, ev)
+        if (g.active(this)) {
+            val cancel = MotionEvent.obtain(ev).apply { action = MotionEvent.ACTION_CANCEL }
+            super.onTouchEvent(cancel)
+            cancel.recycle()
+        }
+        return true
+    }
 
     init {
         // As on iOS and the web: children may draw outside (a row still sliding into place).

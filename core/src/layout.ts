@@ -45,6 +45,21 @@ export const LAYOUT_KEYS = new Set([
 
 export type Frame = [x: number, y: number, w: number, h: number];
 
+/**
+ * The rows of a `list`: only some items have a row node (the window around the
+ * visible part), the rest are stacked by their last measured or estimated height.
+ */
+export interface VirtualRows {
+  /** Number of items, with or without a row. */
+  count(): number;
+  /** Item index of a row node. */
+  indexOf(row: ViewNode): number;
+  /** Records a row's measured height at this width. */
+  measured(index: number, height: number, width: number): void;
+  /** Top of item `index`; `top(count())` is the total height. */
+  top(index: number): number;
+}
+
 let nextId = 1;
 export function resetIds(): void {
   nextId = 1;
@@ -71,6 +86,8 @@ export class ViewNode {
   contentSize: Size | null = null;
   /** Natural size reported by the host (images). */
   intrinsic: Size | null = null;
+  /** Set on a list's body: its children are a window of rows over all items. */
+  virtual: VirtualRows | null = null;
 
   constructor(type: string) {
     this.type = type;
@@ -244,7 +261,9 @@ export function layoutNode(
     return hit;
   }
 
-  const size = isContainer(node.type)
+  const size = node.virtual
+    ? layoutVirtual(node, w, wExact, h, hExact, perform, ctx)
+    : isContainer(node.type)
     ? node.type === "overlay" || node.type === "stack"
       ? layoutOverlay(node, w, wExact, h, hExact, perform, ctx)
       : layoutFlex(node, w, wExact, h, hExact, perform, ctx)
@@ -508,6 +527,34 @@ function layoutOverlay(
       const fy = ch - s.height;
       const t = align === "start" ? 0 : align === "end" ? 1 : align === "stretch" ? 0 : 0.5;
       setFrame(c, round(pl + fx * t), round(pt + fy * t), round(s.width), round(s.height), ctx);
+    }
+    layoutAbsolute(node, width, height, ctx);
+  }
+  return { width, height };
+}
+
+/** A list body: rows stacked at their item's offset, full width; items without a row only take space. */
+function layoutVirtual(
+  node: ViewNode,
+  w: number, wExact: boolean,
+  h: number, hExact: boolean,
+  perform: boolean,
+  ctx: LayoutContext,
+): Size {
+  const v = node.virtual!;
+  const b = node.box;
+  const [pt, pr, pb, pl] = b.padding;
+  const rows = node.children.filter((c) => !c.box.absolute);
+  const innerW = isFinite(w)
+    ? Math.max(0, w - pl - pr)
+    : rows.reduce((a, c) => Math.max(a, layoutNode(c, Infinity, false, Infinity, false, false, ctx).width), 0);
+  for (const c of rows) v.measured(v.indexOf(c), layoutNode(c, innerW, true, Infinity, false, false, ctx).height, innerW);
+  const width = wExact || isFinite(w) ? w : innerW + pl + pr;
+  const height = hExact ? h : clamp(v.top(v.count()) + pt + pb, b.minHeight, b.maxHeight);
+  if (perform) {
+    for (const c of rows) {
+      const s = layoutNode(c, innerW, true, Infinity, false, true, ctx);
+      setFrame(c, round(pl), round(pt + v.top(v.indexOf(c))), round(s.width), round(s.height), ctx);
     }
     layoutAbsolute(node, width, height, ctx);
   }

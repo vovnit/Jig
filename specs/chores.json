@@ -49,26 +49,25 @@
             ]
           },
           {
-            "type": "column",
-            "style": { "gap": 8 },
-            "children": [
-              {
-                "type": "row",
-                "each": "chores",
-                "as": "chore",
-                "style": { "align": "center", "gap": 12, "padding": 12, "radius": 14, "background": "{{chore.done ? 'surface' : 'background'}}", "borderWidth": 1, "borderColor": "border", "transition": 200 },
-                "onTap": [
-                  { "toggle": "chore.done" },
-                  { "set": "stars", "to": "chore.done ? stars + 1 : max(0, stars - 1)" }
-                ],
-                "children": [
-                  { "type": "check", "checked": "{{chore.done}}" },
-                  { "type": "text", "value": "{{chore.name}}", "style": { "grow": 1, "color": "{{chore.done ? 'muted' : 'text'}}" } },
-                  { "type": "shape", "path": "@close", "fill": "muted", "style": { "width": 18, "height": 18 }, "onTap": { "remove": "chore" } }
-                ]
-              },
-              { "type": "text", "if": "len(chores) == 0", "variant": "callout", "value": "No chores yet. Add one below.", "style": { "color": "muted" } }
-            ]
+            "type": "list",
+            "items": "chores",
+            "as": "chore",
+            "reorder": true,
+            "empty": "No chores yet. Add one below.",
+            "footer": "Tap a chore when it's done. Hold to reorder, swipe to delete.",
+            "onTap": [
+              { "toggle": "chore.done" },
+              { "set": "stars", "to": "chore.done ? stars + 1 : max(0, stars - 1)" }
+            ],
+            "swipe": [{ "label": "Delete", "do": { "remove": "chore" } }],
+            "row": {
+              "type": "row",
+              "style": { "align": "center", "gap": 12 },
+              "children": [
+                { "type": "check", "checked": "{{chore.done}}" },
+                { "type": "text", "value": "{{chore.name}}", "style": { "grow": 1, "color": "{{chore.done ? 'muted' : 'text'}}", "transition": 200 } }
+              ]
+            }
           },
           {
             "type": "row",

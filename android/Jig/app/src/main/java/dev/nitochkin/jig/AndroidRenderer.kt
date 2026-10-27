@@ -92,6 +92,11 @@ class AndroidRenderer(private val surface: JigLayout) {
     private val io = Executors.newSingleThreadExecutor()
     /** The text field being edited, kept visible above the keyboard. */
     private var focusedField: EditText? = null
+    /** The frame the runtime last gave each node, in px; a view may still be animating to it. */
+    private val targets = HashMap<Int, android.graphics.Rect>()
+    private val reportingScroll = HashSet<Int>()
+    /** Swipe actions and drag-to-reorder on list rows. */
+    val rows = RowGestures(density, frameOf = { targets[it] }, dispatch = { id, name, payload -> dispatch?.invoke(id, name, payload) })
 
     /** The platform switch's intrinsic size in dp, measured once on main. */
     fun toggleSize(): Pair<Double, Double> {
@@ -120,8 +125,9 @@ class AndroidRenderer(private val surface: JigLayout) {
             when (op.getString(0)) {
                 "create" -> create(op.getInt(1), op.getString(2), op.getJSONObject(3))
                 "update" -> update(op.getInt(1), op.getJSONObject(2))
-                "insert" -> insert(op.getInt(1), op.getInt(2), op.getInt(3), animated = snapshot == null && !interactivePop)
-                "remove" -> remove(op.getInt(2), animated = snapshot == null && !interactivePop)
+                // A list row scrolling into or out of its window (`quiet`) comes and goes without fading.
+                "insert" -> insert(op.getInt(1), op.getInt(2), op.getInt(3), animated = snapshot == null && !interactivePop && !op.optBoolean(4))
+                "remove" -> remove(op.getInt(2), animated = snapshot == null && !interactivePop && !op.optBoolean(3))
                 "frame" -> frame(op.getInt(1), op.getDouble(2), op.getDouble(3), op.getDouble(4), op.getDouble(5))
                 "command" -> if (op.getString(2) == "focus") nodes[op.getInt(1)]?.view?.requestFocus()
             }
@@ -183,8 +189,8 @@ class AndroidRenderer(private val surface: JigLayout) {
             is ViewGroup -> parent
             else -> return
         }
-        // Indexes count live children only: views still fading out are skipped.
-        val live = (0 until container.childCount).map(container::getChildAt).filter { it !in leaving }
+        // Indexes count live children only: views still fading out (and a row's swipe actions) are skipped.
+        val live = (0 until container.childCount).map(container::getChildAt).filter { it !in leaving && it.tag is Int }
         if (child.parent === container && live.indexOf(child) == index) return
         val siblings = live.filter { it !== child }
         (child.parent as? ViewGroup)?.removeView(child)
@@ -220,7 +226,12 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     private fun forget(view: View) {
         val id = view.tag as? Int
-        if (id != null && nodes[id]?.view === view) nodes.remove(id)
+        if (id != null && nodes[id]?.view === view) {
+            nodes.remove(id)
+            targets.remove(id)
+            reportingScroll.remove(id)
+            rows.forget(id)
+        }
         if (view === focusedField) focusedField = null
         if (view is ViewGroup) for (i in 0 until view.childCount) forget(view.getChildAt(i))
     }
@@ -234,10 +245,13 @@ class AndroidRenderer(private val surface: JigLayout) {
         val p = view.layoutParams as? FrameParams ?: FrameParams().also { view.layoutParams = it }
         val nw = ((x + w) * density).roundToInt() - l
         val nh = ((y + h) * density).roundToInt() - t
+        targets[id] = android.graphics.Rect(l, t, l + nw, t + nh)
         if (p.x == l && p.y == t && p.width == nw && p.height == nh) return
         node.frameAnimator?.cancel()
         val tr = transition(node)
-        if (tr != null && view.isAttachedToWindow && id !in createdNow) {
+        // A dragged row takes its new place at once: the finger, not an animation, moves it.
+        val dragged = rows.isDragging(id)
+        if (tr != null && view.isAttachedToWindow && id !in createdNow && !dragged) {
             // Animate the frame by re-laying out the view each tick: positions and sizes move together.
             val from = intArrayOf(p.x, p.y, p.width, p.height)
             val to = intArrayOf(l, t, nw, nh)
@@ -254,6 +268,7 @@ class AndroidRenderer(private val surface: JigLayout) {
                 }
                 start()
             }
+            rows.framed(id)
             return
         }
         p.x = l
@@ -261,6 +276,7 @@ class AndroidRenderer(private val surface: JigLayout) {
         p.width = nw
         p.height = nh
         view.requestLayout()
+        rows.framed(id)
     }
 
     private fun lerp(a: Int, b: Int, f: Float) = (a + (b - a) * f).roundToInt()
@@ -474,7 +490,7 @@ class AndroidRenderer(private val surface: JigLayout) {
         }
         // Scroll views must always clip, or scrolled content draws over the header. Containers
         // don't clip their children (see JigLayout), so clipping comes from each view's own outline.
-        view.clipToOutline = radius > 0 || node.type == "image" || node.type == "scroll" || node.type == "hscroll"
+        view.clipToOutline = radius > 0 || node.type == "image" || node.type == "scroll" || node.type == "hscroll" || s["clip"] == true
         val alpha = (num(s["opacity"]) ?: 1.0).toFloat()
         if (tr != null && view.alpha != alpha) view.animate().alpha(alpha).setDuration(tr.duration).setInterpolator(tr.interpolator)
         else if (tr == null) view.alpha = alpha
@@ -493,6 +509,16 @@ class AndroidRenderer(private val surface: JigLayout) {
                 null,
                 GradientDrawable().apply { cornerRadius = radius; setColor(Color.WHITE) },
             )
+        }
+
+        if (view is JigLayout) {
+            (p["swipeActions"] as? JSONArray)?.let { list ->
+                rows.setActions(view, (0 until list.length()).map { i ->
+                    val a = list.getJSONObject(i)
+                    RowGestures.SwipeAction(a.optString("label"), color(a.opt("color")) ?: Color.RED)
+                })
+            }
+            if (p["reorder"] == true) rows.setReorder(view, true)
         }
 
         when (node.type) {
@@ -570,6 +596,13 @@ class AndroidRenderer(private val surface: JigLayout) {
             }
             "image" -> loadImage(str(p["src"]), view as ImageView, view.tag as Int)
             "scroll", "hscroll" -> {
+                // A long list inside needs the offset to know which rows to build.
+                if (p["reportScroll"] == true && view is JigScrollView && reportingScroll.add(view.tag as Int)) {
+                    val id = view.tag as Int
+                    view.setOnScrollChangeListener { _, _, y, _, _ ->
+                        dispatch?.invoke(id, "scroll", JSONObject().put("y", y / density.toDouble()))
+                    }
+                }
                 val size = p["contentSize"] as? JSONArray ?: return
                 val w = (size.getDouble(0) * density).roundToInt()
                 val h = (size.getDouble(1) * density).roundToInt()

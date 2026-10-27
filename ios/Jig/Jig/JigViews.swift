@@ -50,6 +50,12 @@ final class JigButton: UIButton {
 /// subviews (indicators) would otherwise shift child indexes.
 final class JigScrollView: UIScrollView {
     let content = UIView()
+    /// Set when a long list inside needs the scroll offset.
+    var onScroll: ((CGFloat) -> Void)?
+
+    override var contentOffset: CGPoint {
+        didSet { if contentOffset.y != oldValue.y { onScroll?(contentOffset.y) } }
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)

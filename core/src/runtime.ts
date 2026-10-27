@@ -7,10 +7,10 @@
 import type { Host, Op, Props, Size } from "./bridge.ts";
 import { BUILTIN_COMPONENTS, COLOR_KEYS, SHAPES, TYPE_ALIASES, defaultStyle } from "./builtins.ts";
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, setIn, str } from "./expr.ts";
-import { type Box, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
-import { type Owner, Signal, effect, getOwner, root, untrack } from "./signals.ts";
+import { type Box, type Frame, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
+import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "./signals.ts";
 import { DataStore } from "./store.ts";
-import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
+import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ListSpec, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
 const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "props"]);
 const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
@@ -30,6 +30,45 @@ interface Handlers {
   onChange?: Actions;
   onSubmit?: Actions;
   bind?: string;
+  /** List rows: a swipe action by index, and a drag past a neighbour (by -1 or 1). */
+  onSwipe?: (index: number) => void;
+  onMove?: (by: number) => void;
+}
+
+/** Lists up to this many items keep a row for every item; longer ones only near the visible part. */
+const VIRTUALIZE_AFTER = 60;
+/** A one-line row before any row was measured: 44pt plus its separator. */
+const ROW_ESTIMATE = 44.5;
+
+interface ListRow {
+  key: unknown;
+  item: Signal<unknown>;
+  index: Signal<number>;
+  node: ViewNode;
+  dispose: () => void;
+}
+
+/** A `list`: all of its items, and rows for the window of them that is on (or near) screen. */
+interface ListState {
+  spec: ListSpec;
+  scope: Scope;
+  where: string;
+  owner: Owner | null;
+  body: ViewNode;
+  rowSpec: NodeSpec;
+  items: unknown[];
+  keys: unknown[];
+  count: Signal<number>;
+  rows: Map<unknown, ListRow>;
+  byNode: Map<ViewNode, ListRow>;
+  start: number;
+  end: number;
+  /** Measured row heights by item key, valid at `heightsWidth`. */
+  heights: Map<unknown, number>;
+  heightsWidth: number;
+  /** Top of every item (count + 1 entries); null when a height or the items changed. */
+  offsets: Float64Array | null;
+  scroll: ViewNode | null;
 }
 
 interface Slot {
@@ -85,6 +124,9 @@ export class Runtime {
   /** Last value reported by native for text inputs; native is the source of truth while typing. */
   nativeValues = new Map<number, unknown>();
   scrollNodes = new Set<ViewNode>();
+  /** Scroll offsets the host reported, by scroll node id. */
+  scrollOffsets = new Map<number, number>();
+  lists = new Set<ListState>();
   textStyles = new Map<ViewNode, TextStyle>();
 
   viewport = { width: 390, height: 844, insets: [0, 0, 0, 0] as [number, number, number, number] };
@@ -192,6 +234,11 @@ export class Runtime {
     const t0 = now(this.host);
     const node = this.nodes.get(id);
     if (!node) return;
+    if (name === "scroll") {
+      this.scrollOffsets.set(id, Number(payload.y) || 0);
+      if (this.lists.size) this.scheduleFrame();
+      return;
+    }
     if (name === "load") {
       const width = Number(payload.width) || 0;
       const height = Number(payload.height) || 0;
@@ -215,6 +262,8 @@ export class Runtime {
         if (h.onChange) this.run(h.onChange, childScope(h.scope, { value }));
       }
       if (name === "submit" && h.onSubmit) this.run(h.onSubmit, h.scope);
+      if (name === "swipe" && h.onSwipe) h.onSwipe(Number(payload.index) || 0);
+      if (name === "move" && h.onMove) h.onMove(Math.sign(Number(payload.by) || 0));
     }
     this.stats.bindingsMs += now(this.host) - t0;
   }
@@ -230,20 +279,25 @@ export class Runtime {
   /** Runs layout and sends the batch. Hosts normally reach this through requestFrame. */
   flush(): void {
     this.frameRequested = false;
-    const frames: Op[] = [];
+    const frames = new Map<ViewNode, Frame>();
     const ctx = {
       stats: { measured: 0, cacheHits: 0, skipped: 0 },
       measureLeaf: (n: ViewNode, maxW: number, maxH: number, exactW: boolean) => this.measureLeaf(n, maxW, maxH, exactW),
       onFrame: (n: ViewNode) => {
         n.sentFrame = n.frame;
-        if (n.mounted) frames.push(["frame", n.id, ...n.frame]);
+        frames.set(n, n.frame);
       },
     };
     const t0 = now(this.host);
-    if (this.root.dirty) {
-      const { width, height, insets } = this.viewport;
-      this.root.box = parseBox({ paddingTop: insets[0], paddingRight: insets[1], paddingBottom: insets[2], paddingLeft: insets[3] });
-      layoutRoot(this.root, width, height, ctx);
+    // Layout can move a list's window (rows scrolled near, or measured taller than estimated),
+    // which adds rows to lay out: repeat a few times until the windows settle.
+    for (let pass = 0; pass < 4; pass++) {
+      if (this.root.dirty) {
+        const { width, height, insets } = this.viewport;
+        this.root.box = parseBox({ paddingTop: insets[0], paddingRight: insets[1], paddingBottom: insets[2], paddingLeft: insets[3] });
+        layoutRoot(this.root, width, height, ctx);
+      }
+      if (!this.updateWindows()) break;
     }
     this.stats.layoutMs += now(this.host) - t0 - this.stats.measureMs;
     this.stats.layoutCacheHits += ctx.stats.cacheHits;
@@ -261,7 +315,7 @@ export class Runtime {
     this.structural = [];
     for (const [node, props] of this.updates) if (node.alive && node.mounted) ops.push(["update", node.id, props]);
     this.updates.clear();
-    ops.push(...frames);
+    for (const [n, f] of frames) if (n.alive && n.mounted) ops.push(["frame", n.id, ...f]);
 
     if (ops.length) {
       const t1 = now(this.host);
@@ -348,6 +402,7 @@ export class Runtime {
 
   private buildNode(spec: NodeSpec, scope: Scope, where: string): ViewNode {
     const type = TYPE_ALIASES[spec.type] ?? spec.type;
+    if (type === "list") return this.buildList(spec as ListSpec, scope, where);
     const component = this.components[type];
     if (component && !isPrimitive(type)) return this.buildComponent(spec, component, scope, where);
     return this.buildPrimitive(type, spec, [{ style: spec.style, scope }], scope, where);
@@ -544,6 +599,279 @@ export class Runtime {
     return slot;
   }
 
+  // ---------- Lists ----------
+
+  private buildList(spec: ListSpec, scope: Scope, where: string): ViewNode {
+    const inset = spec.variant !== "plain";
+    const pad = inset ? 16 : 0;
+    const outer = this.buildPrimitive("column", { type: "column" }, [{ style: { gap: 6 }, scope }, { style: spec.style, scope }], scope, where);
+    const body = this.buildPrimitive("column", { type: "column" }, [{ style: inset ? { background: "surface", radius: 12 } : { clip: true }, scope }], scope, `${where}.rows`);
+    const L: ListState = {
+      spec, scope, where, body,
+      owner: getOwner(),
+      rowSpec: {
+        type: "column",
+        style: { background: inset ? "surface" : "background", transition: 200 },
+        onTap: spec.onTap,
+        children: [
+          { type: "column", style: { paddingX: pad, paddingY: 11, minHeight: 44, justify: "center" }, children: spec.row ? [spec.row] : [] },
+          ...(spec.separators === false ? [] : [{ type: "divider", if: "!$last", style: { marginLeft: pad, height: 0.5 } }]),
+        ],
+      },
+      items: [], keys: [],
+      count: new Signal(0),
+      rows: new Map(), byNode: new Map(),
+      start: 0, end: 0,
+      heights: new Map(), heightsWidth: -1, offsets: null,
+      scroll: null,
+    };
+    body.virtual = {
+      count: () => L.items.length,
+      indexOf: (row) => L.byNode.get(row)?.index.peek() ?? 0,
+      measured: (i, height, width) => {
+        if (width !== L.heightsWidth) {
+          L.heights.clear();
+          L.heightsWidth = width;
+          L.offsets = null;
+        }
+        const k = L.keys[i];
+        if (L.heights.get(k) !== height) {
+          L.heights.set(k, height);
+          L.offsets = null;
+        }
+      },
+      top: (i) => this.listOffsets(L)[Math.max(0, Math.min(i, L.items.length))],
+    };
+    this.lists.add(L);
+    onCleanup(() => this.lists.delete(L));
+
+    const caption = (value: string, w: string) =>
+      this.buildNode({ type: "text", variant: "caption", value, style: { paddingX: pad } }, scope, w);
+    const header = spec.header ? caption(spec.header, `${where}.header`) : null;
+    const footer = spec.footer ? caption(spec.footer, `${where}.footer`) : null;
+    let empty: ViewNode | null = null;
+    let disposeEmpty: (() => void) | null = null;
+    const refresh = () => this.setChildren(outer, [header, body, empty, footer].filter((n): n is ViewNode => n !== null));
+
+    effect(() => {
+      let list = this.evalExpr(spec.items, scope, `${where}.items`);
+      if (typeof list === "number") list = Array.from({ length: Math.max(0, Math.min(100000, Math.floor(list))) }, (_, i) => i);
+      const items = Array.isArray(list) ? list : [];
+      untrack(() => this.setListItems(L, items));
+    });
+    const owner = getOwner();
+    effect(() => {
+      const none = L.count.get() === 0 && spec.empty !== undefined;
+      untrack(() => {
+        if (none === (empty !== null)) return;
+        disposeEmpty?.();
+        disposeEmpty = null;
+        empty = none
+          ? root((d) => {
+              disposeEmpty = d;
+              const e = spec.empty!;
+              return typeof e === "string"
+                ? this.buildNode({ type: "text", variant: "callout", value: e, style: { color: "muted", paddingX: pad, paddingY: 8 } }, scope, `${where}.empty`)
+                : this.buildNode(e, scope, `${where}.empty`);
+            }, owner)
+          : null;
+        refresh();
+      });
+    });
+    refresh();
+    return outer;
+  }
+
+  private setListItems(L: ListState, items: unknown[]): void {
+    const { key } = L.spec;
+    const as = L.spec.as ?? "item";
+    const indexAs = L.spec.indexAs ?? "index";
+    const keys: unknown[] = [];
+    const seen = new Set<unknown>();
+    items.forEach((item, i) => {
+      let k: unknown = i;
+      if (key) k = this.evalExpr(key, childScope(L.scope, { [as]: item, [indexAs]: i }), `${L.where}.key`);
+      else if (item && typeof item === "object" && "id" in item) k = (item as { id: unknown }).id;
+      if (seen.has(k)) k = `${String(k)}#${i}`;
+      seen.add(k);
+      keys.push(k);
+    });
+    const before = new Set(L.keys);
+    L.items = items;
+    L.keys = keys;
+    L.offsets = null;
+    L.count.set(items.length);
+    this.reconcileList(L, before);
+  }
+
+  /**
+   * Builds rows for the window and drops the rest. `before`: the keys before a data change,
+   * so rows of new items fade in and rows of deleted ones fade out; rows that only scrolled
+   * into or out of the window come and go quietly.
+   */
+  private reconcileList(L: ListState, before: Set<unknown> | null): void {
+    const [start, end] = this.listWindow(L);
+    L.start = start;
+    L.end = end;
+    const wanted = new Map<unknown, number>();
+    for (let i = start; i < end; i++) wanted.set(L.keys[i], i);
+    const alive = before ? new Set(L.keys) : null;
+    const quiet = new Set<ViewNode>();
+    for (const [k, row] of L.rows) {
+      if (wanted.has(k)) continue;
+      if (!alive || alive.has(k)) quiet.add(row.node);
+      row.dispose();
+      L.rows.delete(k);
+      L.byNode.delete(row.node);
+    }
+    const ordered: ViewNode[] = [];
+    for (const [k, i] of wanted) {
+      let row = L.rows.get(k);
+      if (row) {
+        row.item.set(L.items[i]);
+        row.index.set(i);
+      } else {
+        row = this.buildRow(L, k, i);
+        L.rows.set(k, row);
+        L.byNode.set(row.node, row);
+        if (!before || before.has(k)) quiet.add(row.node);
+      }
+      ordered.push(row.node);
+    }
+    this.setChildren(L.body, ordered, quiet);
+  }
+
+  private buildRow(L: ListState, key: unknown, i: number): ListRow {
+    const { spec } = L;
+    const item = new Signal<unknown>(L.items[i]);
+    const index = new Signal(i);
+    const vars = {};
+    Object.defineProperty(vars, spec.as ?? "item", { enumerable: true, get: () => item.get() });
+    Object.defineProperty(vars, spec.indexAs ?? "index", { enumerable: true, get: () => index.get() });
+    Object.defineProperty(vars, "$last", { enumerable: true, get: () => index.get() === L.count.get() - 1 });
+    const scope = childScope(L.scope, vars);
+    return root((dispose) => {
+      const node = this.buildNode(L.rowSpec, scope, `${L.where}.row`);
+      const h: Handlers = this.handlers.get(node.id) ?? { scope };
+      const swipe = Array.isArray(spec.swipe) ? spec.swipe : [];
+      if (swipe.length) {
+        h.onSwipe = (n) => {
+          const a = swipe[n];
+          if (a?.do) this.run(a.do, scope);
+        };
+        effect(() => {
+          const actions = swipe.map((a, n) => {
+            const c = a.color ?? (hasRemove(a.do) ? "danger" : "accent");
+            return { label: str(this.evalTemplate(a.label ?? "", scope, `${L.where}.swipe[${n}].label`)), color: this.theme[c] ?? c };
+          });
+          untrack(() => this.setProp(node, "swipeActions", actions));
+        });
+      }
+      if (spec.reorder) {
+        node.props.reorder = true;
+        h.onMove = (by) => this.moveListItem(L, index.peek(), by);
+      }
+      this.handlers.set(node.id, h);
+      return { key, item, index, node, dispose };
+    }, L.owner);
+  }
+
+  /** A dragged row passed its neighbour: move its item by one, in the data the list shows. */
+  private moveListItem(L: ListState, from: number, by: number): void {
+    const to = Math.max(0, Math.min(L.items.length - 1, from + by));
+    if (to === from) return;
+    const path = L.spec.items;
+    // The order is written back, so `items` must be the list itself, not a sorted or filtered view of it.
+    if (this.peekPath(path, L.scope) !== L.items) {
+      this.error(`${L.where}.reorder`, `Reordering needs 'items' to be a data path such as "chores", not '${path}'`);
+      return;
+    }
+    const next = [...L.items];
+    const [item] = next.splice(from, 1);
+    next.splice(to, 0, item);
+    this.assign(path, L.scope, next);
+  }
+
+  private listOffsets(L: ListState): Float64Array {
+    const n = L.items.length;
+    if (L.offsets && L.offsets.length === n + 1) return L.offsets;
+    const estimate = this.rowEstimate(L);
+    const o = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) o[i + 1] = o[i] + (L.heights.get(L.keys[i]) ?? estimate);
+    return (L.offsets = o);
+  }
+
+  private rowEstimate(L: ListState): number {
+    if (!L.heights.size) return ROW_ESTIMATE;
+    let sum = 0;
+    for (const h of L.heights.values()) sum += h;
+    return sum / L.heights.size;
+  }
+
+  /** Index of the item at `y` in list coordinates, clamped to the items. */
+  private listIndexAt(L: ListState, y: number): number {
+    const o = this.listOffsets(L);
+    let lo = 0;
+    let hi = L.items.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (o[mid] <= y) lo = mid;
+      else hi = mid - 1;
+    }
+    return Math.max(0, lo);
+  }
+
+  /** The visible part of a long list, in list coordinates: [top, bottom, viewport height]. */
+  private listVisible(L: ListState): [number, number, number] | null {
+    if (!L.body.mounted || L.body.lastLayoutKey === null) return null;
+    if (!L.scroll) {
+      let n = L.body.parent;
+      while (n && n.type !== "scroll") n = n.parent;
+      if (!n) return null;
+      L.scroll = n;
+      // Only scroll views with a long list inside report their offset.
+      this.setProp(n, "reportScroll", true);
+    }
+    let top = 0;
+    let n: ViewNode | null = L.body;
+    while (n && n.parent !== L.scroll) {
+      top += n.frame[1];
+      n = n.parent;
+    }
+    if (!n) return null;
+    const y = (this.scrollOffsets.get(L.scroll.id) ?? 0) - top;
+    const height = L.scroll.frame[3] || this.viewport.height;
+    return [y, y + height, height];
+  }
+
+  /** Rows to build: every item of a short list; for a long one, the visible part and a screen around it. */
+  private listWindow(L: ListState): [number, number] {
+    const n = L.items.length;
+    if (n <= VIRTUALIZE_AFTER) return [0, n];
+    const v = this.listVisible(L);
+    if (!v) return [0, Math.min(n, Math.ceil((2 * this.viewport.height) / this.rowEstimate(L)))];
+    const [from, to, height] = v;
+    const start = this.listIndexAt(L, from - height);
+    return [start, Math.max(start, Math.min(n, this.listIndexAt(L, to + height) + 1))];
+  }
+
+  /** After layout: moves the window of any long list whose rows no longer cover the visible part with margin. */
+  private updateWindows(): boolean {
+    let changed = false;
+    for (const L of this.lists) {
+      const n = L.items.length;
+      if (!L.body.mounted || n <= VIRTUALIZE_AFTER) continue;
+      const v = this.listVisible(L);
+      if (!v) continue;
+      const [from, to, height] = v;
+      const need = [this.listIndexAt(L, from - height / 2), Math.min(n, this.listIndexAt(L, to + height / 2) + 1)];
+      if (need[0] >= L.start && need[1] <= L.end) continue;
+      this.reconcileList(L, null);
+      changed = true;
+    }
+    return changed;
+  }
+
   // ---------- Props, style, tree ops ----------
 
   private bindProp(node: ViewNode, key: string, value: unknown, scope: Scope, where: string): void {
@@ -634,11 +962,12 @@ export class Runtime {
     }
   }
 
-  private setChildren(parent: ViewNode, next: ViewNode[]): void {
+  /** `quiet`: list rows entering or leaving their window, which the host shows without fading. */
+  private setChildren(parent: ViewNode, next: ViewNode[], quiet?: Set<ViewNode>): void {
     const nextSet = new Set(next);
     for (const old of parent.children) {
       if (!nextSet.has(old)) {
-        if (parent.mounted && old.mounted) this.structural.push(["remove", parent.id, old.id]);
+        if (parent.mounted && old.mounted) this.structural.push(quiet?.has(old) ? ["remove", parent.id, old.id, true] : ["remove", parent.id, old.id]);
         this.destroy(old);
       }
     }
@@ -651,7 +980,7 @@ export class Runtime {
       n.parent = parent;
       if (parent.mounted) {
         if (!n.mounted) this.mount(n);
-        this.structural.push(["insert", parent.id, n.id, i]);
+        this.structural.push(quiet?.has(n) ? ["insert", parent.id, n.id, i, true] : ["insert", parent.id, n.id, i]);
       }
     });
     parent.children = next;
@@ -679,6 +1008,7 @@ export class Runtime {
     this.handlers.delete(n.id);
     this.nativeValues.delete(n.id);
     this.scrollNodes.delete(n);
+    this.scrollOffsets.delete(n.id);
     this.textStyles.delete(n);
     this.updates.delete(n);
     for (const c of n.children) this.destroy(c);
@@ -982,7 +1312,7 @@ export class Runtime {
   }
 }
 
-const PRIMITIVES = new Set(["root", "screen", "column", "row", "overlay", "scroll", "hscroll", "text", "button", "textfield", "toggle", "shape", "image", "spacer", "divider"]);
+const PRIMITIVES = new Set(["root", "screen", "column", "row", "overlay", "scroll", "hscroll", "list", "text", "button", "textfield", "toggle", "shape", "image", "spacer", "divider"]);
 const isPrimitive = (t: string) => PRIMITIVES.has(t);
 export const PRIMITIVE_TYPES = [...PRIMITIVES].filter((t) => t !== "root" && t !== "screen");
 
@@ -1006,6 +1336,10 @@ function normalizeTransition(t: unknown): { duration: number; easing: string } |
     return duration > 0 ? { duration, easing } : null;
   }
   return null;
+}
+
+function hasRemove(actions: Actions | undefined): boolean {
+  return (Array.isArray(actions) ? actions : actions ? [actions] : []).some((a) => "remove" in a);
 }
 
 function fontWeightOf(v: unknown): number | undefined {

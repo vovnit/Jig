@@ -10,6 +10,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     var isDark = false
     /// The text field being edited, kept visible above the keyboard.
     private weak var focusedField: UITextField?
+    /// Swipe actions and drag-to-reorder on list rows.
+    private let rows = RowGestures()
 
     private final class Node {
         let type: String
@@ -43,6 +45,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     init(surface: UIView) {
         self.surface = surface
         super.init()
+        rows.dispatch = { [weak self] id, name, payload in self?.dispatch?(id, name, payload) }
         // One recognizer for every tappable node: walk up from the touched view to the
         // nearest tappable one, so a nested tappable (a delete icon in a row) wins.
         let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap(_:)))
@@ -77,19 +80,24 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 update(id: id, props: op[2] as? [String: Any] ?? [:])
             case "insert":
                 guard op.count >= 4, let parent = int(op[1]), let child = int(op[2]), let index = int(op[3]) else { continue }
-                insert(parent: parent, child: child, at: index, animated: snapshot == nil && !interactivePop)
+                // A list row scrolling into its window (`quiet`) just appears.
+                let quiet = op.count > 4 && (op[4] as? Bool) == true
+                insert(parent: parent, child: child, at: index, animated: snapshot == nil && !interactivePop && !quiet)
             case "remove":
                 guard op.count >= 3, let child = int(op[2]) else { continue }
-                remove(id: child, animated: snapshot == nil && !interactivePop)
+                let quiet = op.count > 3 && (op[3] as? Bool) == true
+                remove(id: child, animated: snapshot == nil && !interactivePop && !quiet)
             case "frame":
                 guard op.count >= 6, let id = int(op[1]), let node = nodes[id] else { continue }
                 let f = CGRect(x: double(op[2]), y: double(op[3]), width: double(op[4]), height: double(op[5]))
-                guard node.view.frame != f else { continue }
-                if let t = transition(node), node.view.window != nil, !createdNow.contains(id) {
-                    animate(t) { node.view.frame = f }
+                guard frame(of: node.view) != f else { continue }
+                // A dragged row takes its new place at once: the finger, not an animation, moves it.
+                if let t = transition(node), node.view.window != nil, !createdNow.contains(id), !rows.isDragging(id) {
+                    animate(t) { self.place(node.view, f) }
                 } else {
-                    node.view.frame = f
+                    place(node.view, f)
                 }
+                rows.framed(id)
             case "command":
                 guard op.count >= 3, let id = int(op[1]), let name = op[2] as? String else { continue }
                 if name == "focus" { nodes[id]?.view.becomeFirstResponder() }
@@ -112,6 +120,22 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         self.navDepth = navDepth
         // Layout may have moved the field (a new row, a viewport shrunk by the keyboard).
         revealFocusedField()
+    }
+
+    /// Sets a frame; a swiped or dragged row has a transform, which leaves `frame` undefined.
+    private func place(_ view: UIView, _ f: CGRect) {
+        if view.transform.isIdentity {
+            view.frame = f
+        } else {
+            view.bounds.size = f.size
+            view.center = CGPoint(x: f.midX, y: f.midY)
+        }
+    }
+
+    private func frame(of view: UIView) -> CGRect {
+        if view.transform.isIdentity { return view.frame }
+        let size = view.bounds.size
+        return CGRect(x: view.center.x - size.width / 2, y: view.center.y - size.height / 2, width: size.width, height: size.height)
     }
 
     // MARK: - Transitions
@@ -311,8 +335,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     private func insert(parent: Int, child: Int, at index: Int, animated: Bool) {
         guard let p = nodes[parent], let c = nodes[child] else { return }
         let container = (p.view as? JigScrollView)?.content ?? p.view
-        // Indexes count live children only: views still fading out are skipped.
-        let live = container.subviews.filter { !leaving.contains($0) }
+        // Indexes count live children only: views still fading out (and a row's swipe actions) are skipped.
+        let live = container.subviews.filter { !leaving.contains($0) && $0.tag > 0 }
         if c.view.superview === container, live.firstIndex(of: c.view) == index { return }
         let siblings = live.filter { $0 !== c.view }
         c.view.removeFromSuperview()
@@ -344,7 +368,10 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func forget(_ view: UIView) {
-        if view.tag > 0, nodes[view.tag]?.view === view { nodes.removeValue(forKey: view.tag) }
+        if view.tag > 0, nodes[view.tag]?.view === view {
+            nodes.removeValue(forKey: view.tag)
+            rows.forget(view.tag)
+        }
         for sub in view.subviews { forget(sub) }
     }
 
@@ -464,12 +491,27 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             guard let imageView = view as? UIImageView else { return }
             loadImage(string(p["src"]), into: imageView, id: view.tag)
         case "scroll", "hscroll":
-            guard let scroll = view as? JigScrollView, let size = p["contentSize"] as? [Any], size.count == 2 else { return }
+            guard let scroll = view as? JigScrollView else { return }
+            // A long list inside needs the offset to know which rows to build.
+            if p["reportScroll"] as? Bool == true, scroll.onScroll == nil {
+                let id = view.tag
+                scroll.onScroll = { [weak self, weak scroll] y in
+                    self?.dispatch?(id, "scroll", ["y": Double(y)])
+                    if scroll?.isTracking == true { self?.rows.closeOpen() }
+                }
+            }
+            guard let size = p["contentSize"] as? [Any], size.count == 2 else { break }
             let content = CGSize(width: double(size[0]), height: double(size[1]))
             if scroll.contentSize != content { scroll.setContentSize(content) }
         default:
             break
         }
+        if let list = p["swipeActions"] as? [[String: Any]] {
+            rows.setActions(id: view.tag, view: view, actions: list.map {
+                RowGestures.SwipeAction(label: string($0["label"]), color: color($0["color"]) ?? .systemRed)
+            })
+        }
+        if p["reorder"] as? Bool == true { rows.setReorder(id: view.tag, view: view, on: true) }
         if node.type != "text" { view.isAccessibilityElement = p["tappable"] as? Bool == true }
         if p["tappable"] as? Bool == true { view.accessibilityTraits.insert(.button) }
     }
@@ -481,7 +523,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         let radius = cgFloat(s["radius"]) ?? 0
         view.layer.cornerRadius = radius
         // Scroll views must always clip, or scrolled content draws over the header.
-        if node.type != "shape" { view.clipsToBounds = radius > 0 || view is UIScrollView || node.type == "image" }
+        if node.type != "shape" { view.clipsToBounds = radius > 0 || view is UIScrollView || node.type == "image" || s["clip"] as? Bool == true }
         view.layer.borderWidth = cgFloat(s["borderWidth"]) ?? 0
         view.layer.borderColor = color(s["borderColor"])?.cgColor
         view.alpha = cgFloat(s["opacity"]) ?? 1
@@ -502,6 +544,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     // MARK: - Events
 
     @objc private func handleTap(_ gesture: UITapGestureRecognizer) {
+        // Touching anything closes an open row instead; a drag's touch ending isn't a tap.
+        if rows.closeOpen() || CACurrentMediaTime() - rows.endedAt < 0.3 { return }
         let point = gesture.location(in: surface)
         var view = surface.hitTest(point, with: nil)
         if !(view is UITextField) { surface.endEditing(true) }

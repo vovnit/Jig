@@ -9,10 +9,13 @@ export type Op =
   | ["create", number, string, Props]
   /** Shallow-merge props (and `style`) into an existing view. */
   | ["update", number, Props]
-  /** Insert (or move, if already a child) `child` into `parent` at `index`. */
-  | ["insert", number, number, number]
-  /** Detach `child` from `parent` and destroy it with its whole subtree. */
-  | ["remove", number, number]
+  /**
+   * Insert (or move, if already a child) `child` into `parent` at `index`. `quiet`: a list
+   * row scrolling into its window, which appears without the fade-in of a new item.
+   */
+  | ["insert", number, number, number, quiet?: boolean]
+  /** Detach `child` from `parent` and destroy it with its whole subtree. `quiet`: no fade-out. */
+  | ["remove", number, number, quiet?: boolean]
   /** Position relative to the parent: x, y, width, height in points. */
   | ["frame", number, number, number, number, number]
   /**
@@ -70,7 +73,16 @@ export interface Host {
   log?(level: "info" | "warn" | "error", message: string): void;
 }
 
-/** Events the host sends back: `tap`, `change` {value}, `submit`, `load` {width, height}. */
+/**
+ * Events the host sends back: `tap`, `change` {value}, `submit`, `load` {width, height},
+ * and for lists `scroll` {y} (from a scroll view with `reportScroll`), `swipe` {index}
+ * (a row's swipe action) and `move` {by} (a dragged row passed its neighbour: -1 or 1).
+ *
+ * List rows carry `swipeActions` [{label, color}] and `reorder: true`: the host reveals
+ * the actions on a horizontal swipe (a full swipe runs the first), and lifts the row on a
+ * long press so it follows the finger. While dragged, the row stays under the finger and
+ * takes its new frame on drop; its siblings animate to theirs.
+ */
 export interface HostEvent {
   id: number;
   name: string;

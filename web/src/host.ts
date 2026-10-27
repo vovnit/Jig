@@ -2,6 +2,7 @@
 // absolutely positioned element; the JS layout engine owns all geometry.
 
 import { type Database, type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
+import { RowGestures } from "./rows.ts";
 
 type Style = Record<string, unknown>;
 
@@ -19,10 +20,14 @@ export class DomHost implements Host {
   private types = new Map<number, string>();
   private probe: HTMLDivElement;
   private surface: HTMLElement;
+  /** Last frame of each node, for list row gestures. */
+  private frames = new Map<number, [number, number, number, number]>();
+  private rows: RowGestures;
   onApply?: (ops: Op[]) => void;
 
   constructor(surface: HTMLElement) {
     this.surface = surface;
+    this.rows = new RowGestures({ dispatch: (id, name, payload) => this.runtime.dispatch(id, name, payload), frameOf: (id) => this.frames.get(id) }, surface);
     this.probe = document.createElement("div");
     this.probe.className = "jig-probe";
     document.body.appendChild(this.probe);
@@ -98,8 +103,8 @@ export class DomHost implements Host {
           let ref: Element | null = null;
           let i = 0;
           for (const c of parent.children) {
-            // Indexes count live children only: elements still fading out are skipped.
-            if (c === child || c.classList.contains("jig-leaving")) continue;
+            // Indexes count live children only: elements still fading out (and a row's swipe actions) are skipped.
+            if (c === child || c.classList.contains("jig-leaving") || !(c as HTMLElement).dataset.id) continue;
             if (i++ === op[3]) {
               ref = c;
               break;
@@ -108,7 +113,8 @@ export class DomHost implements Host {
           if (child.parentElement !== parent || child.nextElementSibling !== ref) parent.insertBefore(child, ref);
           // A node with a value transition fades in when it appears in an existing list.
           const transitionMs = (this.transitions.get(op[2]) ?? 0);
-          if (transitionMs && this.createdNow.has(op[2]) && !this.createdNow.has(op[1]) && !snapshot) {
+          // A list row scrolling into its window (`quiet`) just appears.
+          if (transitionMs && this.createdNow.has(op[2]) && !this.createdNow.has(op[1]) && !snapshot && !op[4]) {
             child.animate([{ opacity: 0 }, { opacity: getComputedStyle(child).opacity }], { duration: transitionMs, easing: EASING.ease });
           }
           break;
@@ -119,7 +125,7 @@ export class DomHost implements Host {
           const ms = this.transitions.get(op[2]) ?? 0;
           this.forget(child);
           // A node with a value transition fades out in place, above the siblings moving into its spot.
-          if (ms && !snapshot && child.isConnected) {
+          if (ms && !snapshot && child.isConnected && !op[3]) {
             child.classList.add("jig-leaving");
             child.parentElement?.appendChild(child);
             child.animate([{ opacity: getComputedStyle(child).opacity }, { opacity: 0 }], { duration: ms, easing: EASING.ease, fill: "forwards" })
@@ -132,10 +138,12 @@ export class DomHost implements Host {
         case "frame": {
           const el = this.els.get(op[1]);
           if (!el) break;
-          const [, , x, y, w, h] = op;
+          const [, id, x, y, w, h] = op;
+          this.frames.set(id, [x, y, w, h]);
           el.style.translate = `${x}px ${y}px`;
           el.style.width = `${w}px`;
           el.style.height = `${h}px`;
+          this.rows.framed(id);
           break;
         }
         case "command": {
@@ -191,6 +199,8 @@ export class DomHost implements Host {
       this.types.delete(id);
       this.transitions.delete(id);
       this.trims.delete(id);
+      this.frames.delete(id);
+      this.rows.forget(id);
     }
   }
 
@@ -305,6 +315,19 @@ export class DomHost implements Host {
           content.style.height = `${h}px`;
           break;
         }
+        case "swipeActions":
+          this.rows.setActions(id, el, v as { label: string; color: string }[] | null);
+          break;
+        case "reorder":
+          this.rows.setReorder(id, el, v === true);
+          break;
+        case "reportScroll":
+          // A long list inside needs the offset to know which rows to build.
+          if (v && !el.dataset.reportsScroll) {
+            el.dataset.reportsScroll = "1";
+            el.addEventListener("scroll", () => this.runtime.dispatch(id, "scroll", { y: el.scrollTop }), { passive: true });
+          }
+          break;
         case "tappable":
           if (v && !el.dataset.tappable) {
             el.dataset.tappable = "1";
@@ -374,6 +397,7 @@ export class DomHost implements Host {
         case "borderWidth": st.outlineWidth = val === "" ? "" : `${val}px`; st.outlineStyle = val === "" ? "" : "solid"; st.outlineOffset = val === "" ? "" : `-${val}px`; break;
         case "borderColor": st.outlineColor = String(val); break;
         case "opacity": st.opacity = String(val); break;
+        case "clip": st.overflow = val ? "hidden" : ""; break;
         case "textAlign": st.textAlign = String(val); break;
         case "fontSize": st.fontSize = val === "" ? "" : `${val}px`; break;
         case "fontWeight": st.fontWeight = String(val); break;

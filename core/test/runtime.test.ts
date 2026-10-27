@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { AppSpec } from "../src/spec.ts";
 import type { Op } from "../src/bridge.ts";
+import type { ViewNode } from "../src/layout.ts";
 import { boot, byText, findNode, frame } from "./fake-host.ts";
+
+/** The list row a node belongs to. */
+const rowOf = (n: ViewNode | undefined) => {
+  while (n?.parent && !n.parent.virtual) n = n.parent;
+  return n!;
+};
 
 const load = (name: string): AppSpec => JSON.parse(readFileSync(new URL(`../../specs/${name}.json`, import.meta.url), "utf8"));
 
@@ -160,7 +167,7 @@ test("hot reload keeps state and rebuilds the view", () => {
 test("chores: keyed list, toggling an item, removing an item, adding from a text field", () => {
   const { host, rt } = boot(load("chores"));
   const bed = byText(rt, "Make the bed")!;
-  const row = bed.parent!;
+  const row = rowOf(bed);
   rt.dispatch(row.id, "tap");
   let ops = frame(host);
   assert.equal(rt.get("stars"), 1);
@@ -169,10 +176,9 @@ test("chores: keyed list, toggling an item, removing an item, adding from a text
   assert.equal(byText(rt, "Make the bed"), bed, "keyed rows are reused, not recreated");
   assert.ok(!ops.some((o) => o[0] === "remove"));
 
-  // Remove "Feed the cat" via its close icon.
-  const catRow = byText(rt, "Feed the cat")!.parent!;
-  const close = catRow.children.at(-1)!;
-  rt.dispatch(close.id, "tap");
+  // Remove "Feed the cat" with its swipe action.
+  const catRow = rowOf(byText(rt, "Feed the cat"));
+  rt.dispatch(catRow.id, "swipe", { index: 0 });
   ops = frame(host);
   assert.ok(ops.some((o) => o[0] === "remove" && o[2] === catRow.id));
   assert.equal((rt.get("chores") as unknown[]).length, 2);
@@ -200,7 +206,7 @@ test("meds: navigation with params, toggles and history", () => {
   assert.ok(byText(rt, `${new Date().toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" })} · 1 of 3 taken`));
 
   const metformin = byText(rt, "Metformin")!;
-  rt.dispatch(metformin.parent!.parent!.id, "tap");
+  rt.dispatch(rowOf(metformin).id, "tap");
   frame(host);
   assert.ok(byText(rt, "500 mg every day at 08:00"));
   assert.ok(byText(rt, "‹ Back"));
@@ -224,7 +230,7 @@ test("water: ring, chart and goal all render without errors", () => {
 test("incremental frames: unrelated subtrees are skipped and text is measured once", () => {
   const { host, rt } = boot(load("chores"));
   const before = host.measureCalls;
-  rt.dispatch(byText(rt, "Make the bed")!.parent!.id, "tap");
+  rt.dispatch(rowOf(byText(rt, "Make the bed")).id, "tap");
   let stats = { skippedSubtrees: 0, measureCalls: 0 };
   rt.onStats = (s) => (stats = s);
   frame(host);

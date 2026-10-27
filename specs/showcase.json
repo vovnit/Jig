@@ -56,7 +56,8 @@
       "edit"
     ],
     "moved": false,
-    "keyDraft": ""
+    "keyDraft": "",
+    "rows": []
   },
   "screens": {
     "main": {
@@ -330,13 +331,26 @@
           {
             "type": "text",
             "variant": "headline",
-            "value": "Notes (keyboard test)"
+            "value": "Notes (keyboard test, hold to reorder, swipe to delete)"
           },
           {
-            "type": "text",
-            "each": "notes",
+            "type": "list",
+            "items": "notes",
             "as": "n",
-            "value": "• {{n.text}}"
+            "reorder": true,
+            "empty": "No notes yet.",
+            "swipe": [
+              {
+                "label": "Delete",
+                "do": {
+                  "remove": "n"
+                }
+              }
+            ],
+            "row": {
+              "type": "text",
+              "value": "{{n.text}}"
+            }
           },
           {
             "type": "row",
@@ -444,8 +458,98 @@
                 }
               }
             ]
+          },
+          {
+            "type": "divider"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Long list"
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Open 1,000 rows",
+            "onTap": [
+              {
+                "if": "len(rows) == 0",
+                "then": {
+                  "set": "rows",
+                  "to": "map(range(1000), i => {id: 'r' + i, n: i + 1, flagged: false})"
+                }
+              },
+              {
+                "navigate": "long"
+              }
+            ]
           }
         ]
+      }
+    },
+    "long": {
+      "title": "1,000 rows",
+      "body": {
+        "type": "list",
+        "items": "rows",
+        "as": "r",
+        "variant": "plain",
+        "reorder": true,
+        "header": "Only the rows near the screen exist; the rest are space.",
+        "swipe": [
+          {
+            "label": "Delete",
+            "do": {
+              "remove": "r"
+            }
+          },
+          {
+            "label": "Flag",
+            "color": "accent",
+            "do": {
+              "set": "r.flagged",
+              "to": "!r.flagged"
+            }
+          }
+        ],
+        "row": {
+          "type": "row",
+          "style": {
+            "gap": 12,
+            "align": "center"
+          },
+          "children": [
+            {
+              "type": "shape",
+              "path": "@sparkle",
+              "fill": "{{r.flagged ? 'accent' : 'border'}}",
+              "style": {
+                "width": 20,
+                "height": 20
+              }
+            },
+            {
+              "type": "column",
+              "style": {
+                "grow": 1,
+                "gap": 2
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "variant": "headline",
+                  "value": "Row {{r.n}}"
+                },
+                {
+                  "type": "text",
+                  "if": "r.n % 3 == 0",
+                  "variant": "caption",
+                  "value": "Every third row has a second line, so heights vary."
+                }
+              ]
+            }
+          ]
+        }
       }
     }
   }

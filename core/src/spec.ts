@@ -41,6 +41,32 @@ export interface NodeSpec {
   [prop: string]: unknown;
 }
 
+/**
+ * A native-looking list: `{"type": "list", "items": "chores", "as": "chore", "row": {...}}`.
+ * Rows are virtualized (only those near the visible part exist), so lists can be long.
+ */
+export interface ListSpec extends NodeSpec {
+  type: "list";
+  /** The items: an expression. Reordering needs a plain data path, such as `chores`. */
+  items: string;
+  /** Row content, built for each item with `as` (default `item`) and `indexAs` in scope. */
+  row: NodeSpec;
+  /** `inset` (default): grouped rows on a rounded card. `plain`: full-width rows. */
+  variant?: "inset" | "plain";
+  header?: string;
+  footer?: string;
+  /** Shown instead of the rows when there are no items: text or a node. */
+  empty?: string | NodeSpec;
+  /** Row tap. */
+  onTap?: Actions;
+  /** Swipe actions, revealed by swiping a row to the left; a full swipe runs the first. */
+  swipe?: { label: string; color?: string; do: Actions }[];
+  /** Long-press a row and drag it to reorder the items. */
+  reorder?: boolean;
+  /** Hairlines between rows (default true). */
+  separators?: boolean;
+}
+
 export interface FieldSpec {
   type: "string" | "number" | "boolean" | "date" | "datetime" | "list" | "object";
   default?: unknown;

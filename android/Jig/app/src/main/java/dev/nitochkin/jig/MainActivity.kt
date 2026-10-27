@@ -136,6 +136,7 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         if (ev.action == MotionEvent.ACTION_DOWN) {
+            renderer.rows.onSurfaceDown(ev.rawX, ev.rawY)
             val focused = currentFocus
             if (focused is EditText) {
                 val r = Rect()
