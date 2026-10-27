@@ -31,7 +31,8 @@
     "mode": "board",
     "focus": "",
     "selecting": false,
-    "recording": false
+    "recording": false,
+    "status": ""
   },
   "start": "home",
   "screens": {
@@ -709,8 +710,20 @@
                 },
                 "children": [
                   {
+                    "type": "shape",
+                    "if": "entry.role == 'thought'",
+                    "path": "@sparkle",
+                    "fill": "muted",
+                    "style": {
+                      "width": 12,
+                      "height": 12,
+                      "alignSelf": "start",
+                      "marginTop": 2
+                    }
+                  },
+                  {
                     "type": "text",
-                    "variant": "callout",
+                    "variant": "{{entry.role == 'thought' ? 'caption' : 'callout'}}",
                     "value": "{{entry.text}}",
                     "style": {
                       "grow": 1,
@@ -722,8 +735,8 @@
                     "if": "entry.image",
                     "src": "{{entry.image}}",
                     "style": {
-                      "width": 46,
-                      "height": 100,
+                      "width": 30,
+                      "height": 64,
                       "radius": 6,
                       "borderWidth": 1,
                       "borderColor": "border"
@@ -736,7 +749,7 @@
               "type": "text",
               "variant": "caption",
               "if": "busy || recording",
-              "value": "{{recording ? 'Listening… tap the mic again to send' : 'Working…'}}",
+              "value": "{{recording ? 'Listening… tap the mic again to send' : (status ? status + '…' : 'Working…')}}",
               "style": {
                 "color": "{{recording ? 'danger' : 'muted'}}"
               }

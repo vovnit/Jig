@@ -2,18 +2,23 @@
 // spoken requests, and screenshots for the model to check its changes.
 
 type Done = (result: unknown, error?: string) => void;
+type Progress = (update: Record<string, unknown>) => void;
 
 /** In dev, model calls go through the Vite proxy (vite.config.ts), so the browser needs no CORS headers from the API. */
 function proxied(url: string): string {
   return import.meta.env.DEV ? url.replace(/^https:\/\/api\.meta\.ai\//, "/meta-api/") : url;
 }
 
-export function callService(service: string, args: Record<string, unknown>, done: Done): void {
+export function callService(service: string, args: Record<string, unknown>, done: Done, progress?: Progress): void {
   switch (service) {
     case "http": {
-      const { url, method = "GET", headers = {}, body } = args as { url: string; method?: string; headers?: Record<string, string>; body?: string };
+      const { url, method = "GET", headers = {}, body, stream } = args as { url: string; method?: string; headers?: Record<string, string>; body?: string; stream?: boolean };
       fetch(proxied(url), { method, headers, body })
-        .then(async (res) => done({ status: res.status, body: await res.text() }))
+        .then(async (res) => {
+          if (!stream || !res.body || !progress) return done({ status: res.status, body: await res.text() });
+          await readLines(res.body, (line) => progress({ line }));
+          done({ status: res.status, body: "" });
+        })
         .catch((e: Error) => done(null, e.message));
       return;
     }
@@ -29,6 +34,21 @@ export function callService(service: string, args: Record<string, unknown>, done
     default:
       done(null, `No '${service}' service on the web`);
   }
+}
+
+/** Calls `onLine` for each line of a streamed body as it arrives. */
+async function readLines(body: ReadableStream<Uint8Array>, onLine: (line: string) => void): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let rest = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    const lines = (rest + decoder.decode(value, { stream: true })).split("\n");
+    rest = lines.pop()!;
+    for (const line of lines) onLine(line.replace(/\r$/, ""));
+  }
+  if (rest) onLine(rest);
 }
 
 // ---------- Audio ----------

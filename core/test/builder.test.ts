@@ -16,21 +16,34 @@ function setup(replies: unknown[]) {
     id: "shell",
     name: "Shell",
     data: { apps: { type: "list", default: [] }, apiKey: { type: "string", default: "test-key" } },
-    state: { log: [], busy: false, prompt: "", selected: null, mode: "board", focus: "", recording: false },
+    state: { log: [], busy: false, prompt: "", selected: null, mode: "board", focus: "", recording: false, status: "" },
     screens: { home: { body: { type: "text", value: "Home" } } },
   };
   const { host, rt } = boot(shell, undefined, undefined, { trusted: true });
-  const requests: { url: string; messages: { role: string; content: unknown }[]; tools: { function: { name: string } }[]; input?: unknown }[] = [];
-  host.call = (service, args, done) => {
+  const requests: { url: string; input: { type?: string; output?: string; content?: unknown }[]; tools: { name: string; parameters: { properties: Record<string, { $ref?: string }>; $defs?: Record<string, unknown> } }[]; previous_response_id?: string }[] = [];
+  let n = 0;
+  host.call = (service, args, done, progress) => {
     if (service === "screenshot") return queueMicrotask(() => done({ data: "PNG" }));
     if (service === "audio.start") return queueMicrotask(() => done({}));
     if (service === "audio.stop") return queueMicrotask(() => done({ data: "WAV" }));
     assert.equal(service, "http");
     requests.push({ url: String(args.url), ...JSON.parse(String(args.body)) });
-    const reply = replies.shift() as { output?: unknown };
-    // A Responses reply (transcription) goes back as is; the rest are chat messages.
-    const body = reply?.output ? reply : { choices: [{ message: reply }] };
-    queueMicrotask(() => done({ status: 200, body: JSON.stringify(body) }));
+    const reply = replies.shift() as { output?: unknown; thought?: string };
+    // A transcription is answered whole; an edit step streams its events, as the API does.
+    if (!args.stream) return queueMicrotask(() => done({ status: 200, body: JSON.stringify(reply) }));
+    const response = { id: `resp_${++n}`, output: (reply as { output: unknown[] }).output };
+    const events = [
+      ...(reply.thought ? [
+        { type: "response.reasoning_summary_part.added", item_id: "rs", summary_index: 0 },
+        { type: "response.reasoning_summary_text.delta", item_id: "rs", summary_index: 0, delta: reply.thought.slice(0, 5) },
+        { type: "response.reasoning_summary_text.delta", item_id: "rs", summary_index: 0, delta: reply.thought.slice(5) },
+      ] : []),
+      { type: "response.completed", response },
+    ];
+    queueMicrotask(() => {
+      for (const e of events) progress!({ line: `data: ${JSON.stringify(e)}` });
+      done({ status: 200, body: "" });
+    });
   };
   installBuilder(rt);
   seedApps(rt, [load("chores")]);
@@ -46,7 +59,11 @@ function setup(replies: unknown[]) {
   return { rt, host, requests, idle, edit };
 }
 
-const toolCall = (name: string, args: unknown, id = name) => ({ content: null, tool_calls: [{ id, type: "function", function: { name, arguments: JSON.stringify(args) } }] });
+/** What the agent told the model its last tool call did. */
+const lastOutput = (req: { input: { type?: string; output?: string }[] }) => String(req.input.filter((i) => i.type === "function_call_output").at(-1)?.output);
+
+/** A model step that calls one tool, optionally with a reasoning summary first. */
+const toolCall = (name: string, args: unknown, thought?: string) => ({ thought, output: [{ type: "function_call", call_id: `call_${name}`, name, arguments: JSON.stringify(args) }] });
 
 test("JSON Patch edits a copy and names the op that failed", () => {
   const doc = { a: [1, 2], b: { c: 1 } };
@@ -71,7 +88,7 @@ test("validation catches unknown types, bad actions and expressions that don't r
 
 test("an edit applies a patch, repairs a rejected one, and finishes", async () => {
   const { rt, requests, idle, edit } = setup([
-    toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "{{len(chores) +}}" }] }),
+    toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "{{len(chores) +}}" }] }, "Renaming the main screen."),
     // An object argument sent as JSON text is taken too.
     toolCall("apply_patch", { patch: JSON.stringify([{ op: "replace", path: "/screens/main/title", value: "Today's chores" }]) }),
     toolCall("finish", { message: "Renamed the screen." }),
@@ -81,17 +98,20 @@ test("an edit applies a patch, repairs a rejected one, and finishes", async () =
   assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Today's chores");
   assert.equal(findApp(rt, "chores")!.history!.length, 1, "one change saved, the rejected one wasn't");
   // The model saw the spec, the view and the request, and the errors of the bad patch.
-  assert.match(JSON.stringify(requests[0].messages[1]), /Current spec/);
-  assert.match(JSON.stringify(requests[0].messages[1]), /looking at screen \\"main\\"/);
-  assert.match(JSON.stringify(requests[1].messages.at(-1)), /Not applied, the spec has errors/);
-  assert.deepEqual(requests[0].tools.map((t) => t.function.name), ["apply_patch", "set_spec", "screenshot", "finish"]);
+  assert.match(JSON.stringify(requests[0].input[0]), /Current spec/);
+  assert.match(JSON.stringify(requests[0].input[0]), /looking at screen \\"main\\"/);
+  // Each step sends the conversation so far: the request, the model's calls, their results.
+  assert.match(JSON.stringify(requests[1].input[0]), /Current spec/);
+  assert.equal(requests[1].input[1].type, "function_call");
+  assert.match(lastOutput(requests[1]), /Not applied, the spec has errors/);
+  assert.deepEqual(requests[0].tools.map((t) => t.name), ["apply_patch", "set_spec", "screenshot", "finish"]);
   // The tools that write specs carry the spec's JSON Schema.
-  const params = (name: string) => (requests[0].tools.find((t) => t.function.name === name)!.function as unknown as { parameters: { properties: Record<string, { $ref?: string }>; $defs?: Record<string, unknown> } }).parameters;
+  const params = (name: string) => requests[0].tools.find((t) => t.name === name)!.parameters;
   assert.equal(params("set_spec").properties.spec.$ref, "#/$defs/app");
   assert.ok(params("set_spec").$defs?.node, "set_spec carries the schema");
   assert.equal(params("apply_patch").$defs, undefined, "apply_patch points at it instead of sending it twice");
   const log = (rt.get("log") as { role: string; text: string }[]).map((e) => `${e.role}: ${e.text}`);
-  assert.deepEqual(log.filter((l) => !l.startsWith("step")), ["user: rename the screen", "model: Renamed the screen."]);
+  assert.deepEqual(log.filter((l) => !l.startsWith("step")), ["user: rename the screen", "thought: Renaming the main screen.", "model: Renamed the screen."]);
   assert.ok(log.some((l) => l.startsWith("step: Fixing")));
   assert.equal(rt.get("busy"), false);
 
@@ -117,8 +137,8 @@ test("a spoken request is transcribed, shown, then edited like a typed one", asy
   await idle();
   assert.match(requests[0].url, /\/responses$/);
   assert.match(JSON.stringify(requests[0].input), /data:audio\/wav;base64,WAV/);
-  assert.match(requests[1].url, /\/chat\/completions$/);
-  assert.match(JSON.stringify(requests[1].messages[1]), /Request: Rename the screen to Today's chores/);
+  assert.match(requests[1].url, /\/responses$/);
+  assert.match(JSON.stringify(requests[1].input[0]), /Request: Rename the screen to Today's chores/);
   assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Today's chores");
   const log = (rt.get("log") as { role: string; text: string }[]).filter((e) => e.role !== "step").map((e) => `${e.role}: ${e.text}`);
   assert.deepEqual(log, ["user: “Rename the screen to Today's chores”", "model: Renamed the screen."]);
@@ -184,5 +204,72 @@ test("a screenshot of a screen that isn't on display tells the model so, and sho
   edit("check it");
   await idle();
   assert.equal(rt.get("mode"), "screen", "the builder shows the user the screen the model looks at");
-  assert.match(JSON.stringify(requests[1].messages.at(-1)), /No screenshot available/);
+  assert.match(lastOutput(requests[1]), /No screenshot available/);
+});
+
+test("an app is built in steps: a link to a screen not written yet applies, but the model can't finish with it", async () => {
+  const button = { type: "button", label: "Help", onTap: { navigate: "help" } };
+  const { rt, requests, idle, edit } = setup([
+    toolCall("apply_patch", { patch: [{ op: "add", path: "/screens/main/body/children/-", value: button }] }),
+    toolCall("finish", { message: "Added help." }),
+    toolCall("apply_patch", { patch: [{ op: "add", path: "/screens/help", value: { title: "Help", body: { type: "text", value: "Tap a chore." } } }] }),
+    toolCall("finish", { message: "Added help." }),
+  ]);
+  edit("add a help screen");
+  await idle();
+  assert.match(lastOutput(requests[1]), /Applied.*Still to do before you finish:\n.*no screen named 'help' yet/s);
+  assert.match(lastOutput(requests[2]), /Not finished: the app isn't complete yet/);
+  assert.ok(findApp(rt, "chores")!.spec.screens.help);
+  assert.equal((rt.get("log") as { text: string }[]).at(-1)!.text, "Added help.");
+});
+
+/** A model step that writes a spec in its message, then calls set_spec without arguments. */
+const writeSpec = (json: string) => ({ output: [
+  { type: "message", content: [{ type: "output_text", text: `Rewriting it.\n\n\`\`\`json\n${json}\n\`\`\`` }] },
+  { type: "function_call", call_id: "call_set", name: "set_spec", arguments: "{}" },
+] });
+
+test("a whole spec is written as a json block in the message, and broken JSON gets an error that says where", async () => {
+  const good = { id: "chores", name: "Chores", screens: { main: { title: "Rewritten", body: { type: "text", value: "Hi" } } } };
+  const { rt, requests, idle, edit } = setup([
+    writeSpec('{"id": "chores", "name": "Chores", "screens": {"main": {"body": {"type": "text"}}}}}'),
+    writeSpec(JSON.stringify(good)),
+    toolCall("finish", { message: "Rewrote it." }),
+  ]);
+  edit("rewrite it");
+  await idle();
+  const result = lastOutput(requests[1]);
+  assert.match(result, /The spec isn't valid JSON/);
+  assert.match(result, /⟨here⟩\}/);
+  assert.equal(findApp(rt, "chores")!.spec.screens.main.title, "Rewritten");
+  // The log shows what the model said, not the spec it wrote.
+  const log = (rt.get("log") as { role: string; text: string }[]).map((e) => e.text);
+  assert.ok(!log.some((t) => t.includes("```")));
+});
+
+test("a request that runs out of steps says so, and the next one carries on from there", async () => {
+  const { rt, requests, idle, edit } = setup([...Array.from({ length: 16 }, () => toolCall("screenshot", {})), toolCall("finish", { message: "Done now." })]);
+  edit("build it all");
+  await idle();
+  assert.equal(requests.length, 16);
+  assert.match((rt.get("log") as { text: string }[]).at(-1)!.text, /ran out of steps.*ask me to continue/);
+  assert.equal(rt.get("status"), "", "the status line clears");
+  edit("continue");
+  await idle();
+  // The next request carries the whole conversation on, with the new request at the end.
+  assert.ok(requests[16].input.length > 30);
+  assert.match(JSON.stringify(requests[16].input.at(-1)), /You ran out of steps last time/);
+  assert.equal((rt.get("log") as { text: string }[]).at(-1)!.text, "Done now.");
+});
+
+test("a call with broken JSON arguments is answered, and goes back to the model without them", async () => {
+  const { requests, idle, edit } = setup([
+    { output: [{ type: "function_call", call_id: "call_bad", name: "apply_patch", arguments: '{"patch": [{"op": "add"' }] },
+    toolCall("finish", { message: "Done." }),
+  ]);
+  edit("anything");
+  await idle();
+  const call = requests[1].input.find((i) => i.type === "function_call") as { arguments?: string };
+  assert.equal(call.arguments, "{}");
+  assert.match(lastOutput(requests[1]), /The arguments weren't valid JSON/);
 });

@@ -50,3 +50,8 @@ test("the model's tool schema resolves every reference and leaves aliases out", 
   const types = (schema.$defs!.node.anyOf as Schema[]).map((b) => b.properties?.type?.const);
   assert.ok(types.includes("list") && !types.includes("vstack"));
 });
+
+test("a bare expression written as a binding works the same", () => {
+  const spec = app({ type: "column", children: [{ type: "text", value: "shown", if: "{{!hidden}}" }, { type: "text", each: "{{range(2)}}", as: "i", value: "{{i}}" }] }, { state: { hidden: false } } as Partial<AppSpec>);
+  assert.deepEqual(validateSpec(spec), []);
+});

@@ -158,6 +158,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
         native.setProperty("call", JSCallFunction { args ->
             val id = (args[2] as Number).toInt()
             val resolve: (String) -> Unit = { json -> js.post { call("__jigResolve", id, json) } }
+            val progress: (String) -> Unit = { json -> js.post { call("__jigProgress", id, json) } }
             if (args[0] == "screenshot") {
                 // A PNG of a node's view, drawn by the renderer on main.
                 val node = runCatching { JSONObject(args[1] as String).getInt("id") }.getOrDefault(0)
@@ -165,7 +166,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
                     val png = renderer.snapshot(node)
                     resolve(if (png != null) Services.result(JSONObject().put("data", png)) else Services.error("No view to take a picture of"))
                 }
-            } else Services.handle(args[0] as String, args[1] as String, resolve)
+            } else Services.handle(args[0] as String, args[1] as String, resolve, progress)
             null
         })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })

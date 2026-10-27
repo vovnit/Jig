@@ -13,11 +13,13 @@
 //   secretSet(app, key, value) -> error | null, secretDelete(app, key) -> error | null
 //   secretClear(app) -> error | null
 //   now() -> milliseconds, log(level, message)
-//   call(service, argsJson, callId)              async: the host answers __jigResolve(callId, json)
+//   call(service, argsJson, callId)              async: the host answers __jigResolve(callId, json),
+//                                                after any number of __jigProgress(callId, json)
 //                                                with {"result": ...} or {"error": "..."} on the JS thread
 
 var __frameQueue = [];
 var __calls = {};
+var __progress = {};
 var __nextCall = 1;
 
 function check(error) {
@@ -55,9 +57,10 @@ var host = {
     },
     clear: function (app) { check(__native.secretClear(app)); }
   },
-  call: function (service, args, done) {
+  call: function (service, args, done, progress) {
     var id = __nextCall++;
     __calls[id] = done;
+    if (progress) __progress[id] = progress;
     __native.call(service, JSON.stringify(args || {}), id);
   },
   now: function () { return __native.now(); },
@@ -82,9 +85,15 @@ function __jigBoot(shellJson, seedsJson) {
 function __jigResolve(id, json) {
   var done = __calls[id];
   delete __calls[id];
+  delete __progress[id];
   if (!done) return;
   var r = JSON.parse(json);
   done(r.result, r.error);
+}
+/** A host service reports progress before it finishes (a streamed HTTP body's lines). */
+function __jigProgress(id, json) {
+  var progress = __progress[id];
+  if (progress) progress(JSON.parse(json));
 }
 function __jigSetColorScheme(scheme) { runtime.setColorScheme(scheme); }
 function __jigSetViewport(width, height, top, right, bottom, left) { runtime.setViewport(width, height, [top, right, bottom, left]); }

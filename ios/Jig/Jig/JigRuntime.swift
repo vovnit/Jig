@@ -136,6 +136,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         let call: @convention(block) (String, String, Int) -> Void = { [weak self] service, args, id in
             guard let runtime = self else { return }
             let resolve: @Sendable (String) -> Void = { json in runtime.js.async { runtime.call("__jigResolve", id, json) } }
+            let progress: @Sendable (String) -> Void = { json in runtime.js.async { runtime.call("__jigProgress", id, json) } }
             if service == "screenshot" {
                 // A PNG of a node's view, drawn by the renderer on main.
                 let node = ((try? JSONSerialization.jsonObject(with: Data(args.utf8))) as? [String: Any])?["id"] as? Int ?? 0
@@ -146,7 +147,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
                 }
                 return
             }
-            Services.handle(service, argsJSON: args, done: resolve)
+            Services.handle(service, argsJSON: args, done: resolve, progress: progress)
         }
         let now: @convention(block) () -> Double = { CACurrentMediaTime() * 1000 }
         let log: @convention(block) (String, String) -> Void = { level, message in NSLog("[jig] %@: %@", level, message) }

@@ -76,11 +76,18 @@ export interface Host {
   /**
    * Starts an asynchronous host service and calls `done` with its result (on the runtime's
    * thread) or an error message. Only the trusted shell reaches it. Services:
-   * - `http` {url, method?, headers?, body?} → {status, body}
+   * - `http` {url, method?, headers?, body?, stream?} → {status, body}. With `stream: true`
+   *   the body arrives as it is read instead: `progress({line})` for each line (server-sent
+   *   events), then `done({status, body: ""})`.
    * - `audio.start` {} → {}, `audio.stop` {} → {data: base64 WAV, mono 16 kHz}
    * - `screenshot` {id} → {data: base64 PNG of that node's view}
    */
-  call?(service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void): void;
+  call?(
+    service: string,
+    args: Record<string, unknown>,
+    done: (result: unknown, error?: string) => void,
+    progress?: (update: Record<string, unknown>) => void,
+  ): void;
 }
 
 /**

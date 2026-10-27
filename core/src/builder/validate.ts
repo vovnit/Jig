@@ -10,10 +10,21 @@ import type { Action, AppSpec, NodeSpec } from "../spec.ts";
 
 /** Problems with the spec, each with where it is; empty when it renders cleanly. */
 export function validateSpec(spec: unknown): string[] {
-  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return ["The spec must be a JSON object"];
+  const { errors, unfinished } = specProblems(spec);
+  return [...errors, ...unfinished];
+}
+
+/**
+ * The spec's errors (it can't be applied), and what is unfinished: a button that navigates
+ * to a screen not written yet. An app is built in steps, so an unfinished one may be applied
+ * and previewed, but the model can't finish with it.
+ */
+export function specProblems(spec: unknown): { errors: string[]; unfinished: string[] } {
+  if (!spec || typeof spec !== "object" || Array.isArray(spec)) return { errors: ["The spec must be a JSON object"], unfinished: [] };
   const s = spec as AppSpec;
   const components = s.components && typeof s.components === "object" ? s.components : {};
   const errors = schemaErrors(spec, specSchema(components));
+  const unfinished: string[] = [];
 
   if (typeof s.start === "string" && s.screens && !s.screens[s.start]) errors.push(`start: no screen named '${s.start}'`);
   const screens = new Set(Object.keys(s.screens ?? {}));
@@ -21,7 +32,7 @@ export function validateSpec(spec: unknown): string[] {
     for (const [i, a] of (Array.isArray(actions) ? actions : [actions]).entries()) {
       const w = Array.isArray(actions) ? `${where}[${i}]` : where;
       if (!a || typeof a !== "object") continue;
-      if ("navigate" in a && !screens.has(a.navigate)) errors.push(`${w}: no screen named '${a.navigate}'`);
+      if ("navigate" in a && !screens.has(a.navigate)) unfinished.push(`${w}: no screen named '${a.navigate}' yet`);
       else if ("call" in a) errors.push(`${w}: apps can't call container services`);
       else if ("if" in a) {
         const c = a as Extract<Action, { if: string }>;
@@ -56,7 +67,7 @@ export function validateSpec(spec: unknown): string[] {
     checkNode(screen?.footer as NodeSpec, `screens.${name}.footer`);
   }
   for (const [name, c] of Object.entries(components)) checkNode(c, `components.${name}`);
-  if (errors.length) return errors;
+  if (errors.length) return { errors, unfinished };
 
   // Render every screen, as a whiteboard card would.
   for (const name of screens) {
@@ -65,7 +76,7 @@ export function validateSpec(spec: unknown): string[] {
       if (!errors.includes(line)) errors.push(line);
     }
   }
-  return errors;
+  return { errors, unfinished };
 }
 
 /** A layout-only host: text is measured roughly, nothing is drawn. */

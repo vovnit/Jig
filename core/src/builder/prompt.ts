@@ -54,7 +54,8 @@ Paths may go into a row's item: {"toggle": "chore.done"}.
 
 # How to work
 - Make the smallest change that does what the user asked; keep their data keys, so saved data survives the edit.
-- Edit with apply_patch (JSON Patch on the whole spec). Use set_spec only for a new app or a rewrite. Send the spec and the patch as JSON, not as strings; the tools' JSON Schema gives every shape.
+- Edit with apply_patch (JSON Patch on the whole spec); send the patch as JSON, not inside a string. Use set_spec only for a new app or a rewrite: write the complete spec in your message as one \`\`\`json block, then call set_spec with no arguments. The tools' JSON Schema gives every shape.
+- A new app can be built in steps: a button may lead to a screen you add next, but finish only once every screen it leads to exists.
 - A rejected change returns the errors: fix them and try again.
 - The user's view tells you what they are looking at and what they selected: "this" and "here" mean that.
 - After a change you can take a screenshot to check it looks right, then fix what doesn't.

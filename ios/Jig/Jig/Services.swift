@@ -3,13 +3,14 @@ import Foundation
 
 /// Host services for the shell (`Host.call` in the runtime): HTTP for the model and audio
 /// for spoken requests (screenshots need the renderer; JigRuntime handles those). Each call
-/// answers once with JSON, `{"result": ...}` or `{"error": "..."}`, on any thread.
+/// answers once with JSON, `{"result": ...}` or `{"error": "..."}`, on any thread, after any
+/// number of progress updates (a streamed body's lines).
 nonisolated enum Services {
-    static func handle(_ service: String, argsJSON: String, done: @escaping @Sendable (String) -> Void) {
+    static func handle(_ service: String, argsJSON: String, done: @escaping @Sendable (String) -> Void, progress: @escaping @Sendable (String) -> Void) {
         let args = (try? JSONSerialization.jsonObject(with: Data(argsJSON.utf8))) as? [String: Any] ?? [:]
         switch service {
         case "http":
-            http(args, done: done)
+            http(args, done: done, progress: progress)
         case "audio.start":
             DispatchQueue.main.async { MainActor.assumeIsolated { Recorder.shared.start(done: done) } }
         case "audio.stop":
@@ -19,7 +20,7 @@ nonisolated enum Services {
         }
     }
 
-    private static func http(_ args: [String: Any], done: @escaping @Sendable (String) -> Void) {
+    private static func http(_ args: [String: Any], done: @escaping @Sendable (String) -> Void, progress: @escaping @Sendable (String) -> Void) {
         guard let url = (args["url"] as? String).flatMap(URL.init(string:)), url.scheme == "https" || url.scheme == "http" else {
             return done(error("A valid http(s) url is required"))
         }
@@ -27,6 +28,21 @@ nonisolated enum Services {
         request.httpMethod = args["method"] as? String ?? "GET"
         for (k, v) in args["headers"] as? [String: String] ?? [:] { request.setValue(v, forHTTPHeaderField: k) }
         if let body = args["body"] as? String { request.httpBody = Data(body.utf8) }
+        if args["stream"] as? Bool == true {
+            // Server-sent events: each line goes to JS as it arrives (`lines` skips the blank
+            // separators, which carry nothing).
+            let request = request
+            Task {
+                do {
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    for try await line in bytes.lines { progress(encode(["line": line])) }
+                    done(result(["status": (response as? HTTPURLResponse)?.statusCode ?? 0, "body": ""]))
+                } catch {
+                    done(Services.error(error.localizedDescription))
+                }
+            }
+            return
+        }
         URLSession.shared.dataTask(with: request) { data, response, err in
             if let err { return done(error(err.localizedDescription)) }
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
@@ -37,7 +53,7 @@ nonisolated enum Services {
     static func result(_ value: Any) -> String { encode(["result": value]) }
     static func error(_ message: String) -> String { encode(["error": message]) }
 
-    private static func encode(_ object: [String: Any]) -> String {
+    static func encode(_ object: [String: Any]) -> String {
         let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data(#"{"error":"Unencodable result"}"#.utf8)
         return String(decoding: data, as: UTF8.self)
     }

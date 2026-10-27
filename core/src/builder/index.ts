@@ -8,7 +8,15 @@ import { addApp, commitEdit, findApp, redoEdit, undoEdit } from "./registry.ts";
 
 export function installBuilder(shell: Runtime): void {
   let nextLog = 1;
-  const log = (entry: Omit<LogEntry, "id">) => shell.set("log", [...((shell.get("log") as LogEntry[]) ?? []), { ...entry, id: `l${nextLog++}` }]);
+  const log = (entry: Omit<LogEntry, "id">): string => {
+    const id = `l${nextLog++}`;
+    shell.set("log", [...((shell.get("log") as LogEntry[]) ?? []), { ...entry, id }]);
+    return id;
+  };
+  const update = (id: string, entry: Partial<Omit<LogEntry, "id">>) =>
+    shell.set("log", ((shell.get("log") as LogEntry[]) ?? []).map((e) => (e.id === id ? { ...e, ...entry } : e)));
+  /** Runs that ran out of steps, by app: the next request on that app carries on from there. */
+  const unfinished = new Map<string, unknown[]>();
   const preview = (id: string) => shell.children.find((c) => c.spec?.id === id);
 
   const deps = (id: string): AgentDeps => ({
@@ -17,7 +25,8 @@ export function installBuilder(shell: Runtime): void {
       model: String(shell.get("model") || "muse-spark-1.3"),
       baseUrl: String(shell.get("baseUrl") || "https://api.meta.ai/v1"),
     },
-    http: (req) => shell.hostCall("http", req as unknown as Record<string, unknown>),
+    http: (req, onLine) =>
+      shell.hostCall("http", req as unknown as Record<string, unknown>, onLine && ((u) => typeof u.line === "string" && onLine(u.line))),
     getSpec: () => findApp(shell, id)?.spec as AppSpec,
     screenshot: shell.host.call ? (screen) => screenshot(id, screen) : undefined,
     commit: (spec) => commitEdit(shell, id, { ...spec, id }),
@@ -28,6 +37,8 @@ export function installBuilder(shell: Runtime): void {
       return { screen: shown ?? spec?.start ?? screens[0] ?? "", screens, selected: (shell.get("selected") as BuilderView["selected"]) ?? null };
     },
     log,
+    update,
+    status: (text) => shell.set("status", text),
   });
 
   /**
@@ -54,7 +65,9 @@ export function installBuilder(shell: Runtime): void {
     if (shell.get("busy")) return;
     shell.set("busy", true);
     try {
-      await runEdit(deps(id), request);
+      const outcome = await runEdit(deps(id), { ...request, continueFrom: unfinished.get(id) });
+      if (outcome.finished) unfinished.delete(id);
+      else unfinished.set(id, outcome.conversation);
     } catch (e) {
       log({ role: "error", text: (e as Error).message });
     } finally {
@@ -85,7 +98,9 @@ export function installBuilder(shell: Runtime): void {
     shell.set("newId", id);
     shell.set("newPrompt", "");
     log({ role: "user", text });
-    void run(id, { text: `Create a new app for this, replacing the placeholder spec (keep id "${id}"): ${text}` });
+    void run(id, {
+      text: `Create a new app for this, replacing the placeholder spec (keep id "${id}"): ${text}\n\nWrite the complete spec in your message as one \`\`\`json block first, then call set_spec with no arguments.`,
+    });
   });
 
   // A spoken request: record until the second tap, then the audio goes to the model.

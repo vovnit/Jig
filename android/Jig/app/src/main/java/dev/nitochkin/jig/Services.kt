@@ -8,7 +8,8 @@ import java.util.concurrent.Executors
 /**
  * Host services for the shell (`Host.call` in the runtime): HTTP for the model and audio for
  * spoken requests (screenshots need the renderer; JigRuntime handles those). Each call
- * answers once with JSON, `{"result": ...}` or `{"error": "..."}`, from a background thread.
+ * answers once with JSON, `{"result": ...}` or `{"error": "..."}`, from a background thread,
+ * after any number of progress updates (a streamed body's lines).
  */
 object Services {
     private val io = Executors.newCachedThreadPool()
@@ -16,10 +17,10 @@ object Services {
     /** Asks the user for a runtime permission (set by the activity); calls back with the answer. */
     var requestPermission: ((String, (Boolean) -> Unit) -> Unit)? = null
 
-    fun handle(service: String, argsJson: String, done: (String) -> Unit) {
+    fun handle(service: String, argsJson: String, done: (String) -> Unit, progress: (String) -> Unit) {
         val args = runCatching { JSONObject(argsJson) }.getOrElse { JSONObject() }
         when (service) {
-            "http" -> io.execute { done(http(args)) }
+            "http" -> io.execute { done(http(args, progress)) }
             "audio.start" -> {
                 val ask = requestPermission ?: return done(error("Can't ask for the microphone here"))
                 ask(android.Manifest.permission.RECORD_AUDIO) { granted ->
@@ -31,7 +32,7 @@ object Services {
         }
     }
 
-    private fun http(args: JSONObject): String = try {
+    private fun http(args: JSONObject, progress: (String) -> Unit): String = try {
         val url = URL(args.getString("url"))
         if (url.protocol != "https" && url.protocol != "http") error("A valid http(s) url is required")
         else {
@@ -45,9 +46,17 @@ object Services {
                 c.outputStream.use { it.write(args.getString("body").toByteArray()) }
             }
             val status = c.responseCode
-            val body = (if (status >= 400) c.errorStream else c.inputStream)?.bufferedReader()?.use { it.readText() } ?: ""
-            c.disconnect()
-            result(JSONObject().put("status", status).put("body", body))
+            val stream = if (status >= 400) c.errorStream else c.inputStream
+            if (args.optBoolean("stream")) {
+                // Server-sent events: each line goes to JS as it arrives.
+                stream?.bufferedReader()?.use { r -> r.lineSequence().forEach { progress(JSONObject().put("line", it).toString()) } }
+                c.disconnect()
+                result(JSONObject().put("status", status).put("body", ""))
+            } else {
+                val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+                c.disconnect()
+                result(JSONObject().put("status", status).put("body", body))
+            }
         }
     } catch (e: Exception) {
         error(e.message ?: e.toString())

@@ -551,7 +551,9 @@ const cache = new Map<string, Compiled>();
 export function compile(src: string): Compiled {
   let fn = cache.get(src);
   if (!fn) {
-    fn = new Parser(src).parse();
+    // A bare expression written as a binding ("if": "{{done}}") means the same thing.
+    const bound = /^\s*\{\{([\s\S]*)\}\}\s*$/.exec(src);
+    fn = new Parser(bound && !bound[1].includes("}}") ? bound[1] : src).parse();
     cache.set(src, fn);
   }
   return fn;

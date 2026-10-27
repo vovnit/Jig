@@ -59,8 +59,8 @@ export class DomHost implements Host {
     },
   };
 
-  call(service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void): void {
-    callService(service, args, done);
+  call(service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void, progress?: (update: Record<string, unknown>) => void): void {
+    callService(service, args, done, progress);
   }
 
   requestFrame(cb: () => void): void {

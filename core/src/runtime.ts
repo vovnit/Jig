@@ -821,10 +821,12 @@ export class Runtime {
   }
 
   /** A host service as a promise (see `Host.call`). */
-  hostCall<T = Record<string, unknown>>(service: string, args: Record<string, unknown> = {}): Promise<T> {
+  hostCall<T = Record<string, unknown>>(service: string, args: Record<string, unknown> = {}, progress?: (update: Record<string, unknown>) => void): Promise<T> {
     const call = this.host.call;
     if (!this.trusted || !call) return Promise.reject(new Error(`The host has no '${service}' service`));
-    return new Promise((resolve, reject) => call.call(this.host, service, args, (result, error) => (error ? reject(new Error(error)) : resolve(result as T))));
+    return new Promise((resolve, reject) =>
+      call.call(this.host, service, args, (result, error) => (error ? reject(new Error(error)) : resolve(result as T)), progress),
+    );
   }
 
   /** The apps embedded in this runtime, for hosts and the builder. */
