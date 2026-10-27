@@ -10,6 +10,7 @@ import { openEpub, readEpubChapter, readEpubImage, type ZipSource } from "./epub
 import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, effectiveNow, freeIdentifiers, setIn, str } from "./expr.ts";
 import { type Box, type Frame, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "./signals.ts";
+import { projectPublisher } from "./shared.ts";
 import { DataStore } from "./store.ts";
 import { type Action, type Actions, type AppSpec, type ColorScheme, ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, type FieldSpec, type ListSpec, NODE_TYPES, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
@@ -139,6 +140,12 @@ interface WatchHub {
   stopUpstream: (() => void) | null;
 }
 
+/** One subscriber of a shared collection: the reader's update. */
+interface SharedSub {
+  push: (value: unknown[]) => void;
+  fail: (message: string) => void;
+}
+
 const now = (host: Host) => host.now?.() ?? (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
 
 function defaultFor(f: FieldSpec): unknown {
@@ -208,10 +215,18 @@ export class Runtime {
   private liveSources = new Map<string, () => void>();
   /** Shared host watches (location, heading): one host watch feeds every subscriber. */
   private watchHubs = new Map<string, WatchHub>();
+  /** Shared collections (`shared.<name>`): the top-level runtime owns each list, embedded readers subscribe through their parent. */
+  private sharedSignals = new Map<string, Signal<unknown[]>>();
+  private sharedSources = new Map<string, () => void>();
+  private sharedHubs = new Map<string, { subs: Set<SharedSub>; latest: unknown[] | null }>();
+  /** Bumped after data saves, so the shell recomputes shared collections only when an app could have changed. */
+  dataVersion = 0;
   /** Last value written to secure storage per secret key (undefined: none stored). */
   private savedSecrets = new Map<string, unknown>();
   private appOwner: Owner | null = null;
   private textCache = new Map<string, Size>();
+  /** Effective button padding last sent to the host, by node id (shrunk to fit, or the full box padding). */
+  private buttonPads = new Map<number, [number, number, number, number]>();
   private globalScope: Scope;
   /** Bumped in `load` and `dispose`: async answers from an older generation are dropped. */
   private generation = 0;
@@ -231,11 +246,12 @@ export class Runtime {
         const s = signals.get(name);
         if (s) return s.get();
         if (name === "params") return this.nav.get().at(-1)?.params ?? {};
+        if (name === "shared") return this.sharedObject();
         // Live values come after state and data.
         if (live.has(name) || Object.hasOwn(LIVE, name)) return this.liveSignal(name).get();
         return undefined;
       },
-      has: (name) => signals.has(name) || name === "params" || live.has(name) || Object.hasOwn(LIVE, name),
+      has: (name) => signals.has(name) || name === "params" || name === "shared" || live.has(name) || Object.hasOwn(LIVE, name),
     };
   }
 
@@ -250,6 +266,7 @@ export class Runtime {
     this.restoreDevice();
     this.appOwner?.dispose();
     this.stopLive();
+    this.stopSharedLocal();
     this.pinned = screen && spec.screens[screen] ? screen : null;
     if (fresh || this.spec?.id !== spec.id) this.savedSecrets.clear();
     if (fresh) {
@@ -319,6 +336,7 @@ export class Runtime {
     this.appOwner?.dispose();
     this.appOwner = null;
     this.stopLive();
+    this.stopSharedLocal();
     for (const e of this.embeds) e.rt.dispose();
     this.embeds.clear();
   }
@@ -437,6 +455,7 @@ export class Runtime {
         if (!prev || prev[0] !== c.width || prev[1] !== c.height) this.setProp(s, "contentSize", [c.width, c.height]);
       }
     }
+    this.adjustButtonPadding();
 
     const ops: Op[] = this.structural;
     this.structural = [];
@@ -513,6 +532,188 @@ export class Runtime {
     for (const stop of this.liveSources.values()) stop();
     this.liveSources.clear();
     this.live.clear();
+  }
+
+  // ---------- Shared collections ----------
+
+  /**
+   * `shared` in scope: an object with a getter per collection the app reads, so
+   * `shared.workouts` tracks only that collection's signal. An app's own `shared`
+   * key shadows the store (the signals lookup runs first).
+   */
+  private sharedObject(): Record<string, unknown> {
+    const names = this.spec?.read ?? [];
+    const out: Record<string, unknown> = {};
+    for (const name of names) {
+      if (typeof name !== "string") continue;
+      Object.defineProperty(out, name, {
+        enumerable: true,
+        get: () => this.sharedSignal(name).get(),
+      });
+    }
+    return out;
+  }
+
+  /** The cell of a shared collection, starting its gate and subscription on first read. */
+  private sharedSignal(name: string): Signal<unknown[]> {
+    let s = this.sharedSignals.get(name);
+    if (!s) {
+      const hub = this.sharedHubs.get(name);
+      s = new Signal<unknown[]>(hub?.latest ?? []);
+      this.sharedSignals.set(name, s);
+      if (!this.sharedSources.has(name)) {
+        const stop = this.startSharedList(name, s);
+        if (stop) this.sharedSources.set(name, stop);
+      }
+    }
+    return s;
+  }
+
+  /**
+   * Starts a collection's source: the gate (once per reader and collection), then a
+   * subscription through the parent to the top-level runtime that owns the list.
+   * Reading the app's own collection needs no ask. Denied readers stay empty with
+   * one error. A standalone app without a shell sees its own published items live.
+   */
+  private startSharedList(name: string, signal: Signal<unknown[]>): () => void {
+    let stopped = false;
+    let unsub: (() => void) | null = null;
+    const gen = this.generation;
+    const reader = this.spec;
+    void Promise.resolve()
+      .then(() => {
+        if (stopped || gen !== this.generation) return false;
+        if (this.spec.publish?.[name]) return true;
+        if (!this.gate) return true;
+        return this.gate(this.spec, `shared.${name}`);
+      })
+      .then((allowed) => {
+        if (stopped || gen !== this.generation) return;
+        if (!allowed) {
+          this.recordError(`shared.${name}`, `Reading ${name} isn't allowed`);
+          return;
+        }
+        if (!this.embedded && !this.signals.has("apps")) {
+          // No shell above to own the list: the app's own published items, live.
+          const from = this.spec.publish?.[name]?.from;
+          if (!from) return;
+          let disposeEffect: (() => void) | null = null;
+          root((dispose) => {
+            disposeEffect = dispose;
+            effect(() => {
+              if (stopped || gen !== this.generation) return;
+              const list = this.signals.get(from)?.get();
+              const items = projectPublisher(this.spec, { [from]: list }, name);
+              untrack(() => signal.set(items));
+            });
+          }, this.appOwner);
+          unsub = () => {
+            stopped = true;
+            try {
+              disposeEffect?.();
+            } catch {
+              // Stopping never fails the app.
+            }
+            disposeEffect = null;
+          };
+          return;
+        }
+        try {
+          unsub = this.subscribeSharedCollection(
+            name,
+            reader,
+            (value) => {
+              if (!stopped && gen === this.generation) signal.set(value);
+            },
+            (message) => {
+              if (!stopped && gen === this.generation) this.recordError(`shared.${name}`, message);
+            },
+          );
+        } catch (e) {
+          this.recordError(`shared.${name}`, (e as Error).message);
+        }
+      })
+      .catch((e) => {
+        if (!stopped && gen === this.generation) this.recordError(`shared.${name}`, (e as Error).message);
+      });
+    return () => {
+      stopped = true;
+      try {
+        unsub?.();
+      } catch {
+        // Stopping never fails the app.
+      }
+      unsub = null;
+    };
+  }
+
+  /**
+   * Subscribes to a collection: the top-level runtime owns the list, embedded ones
+   * forward through their parent (intermediate containers only forward the
+   * already-authorized subscription). A new subscriber gets the latest list at once.
+   */
+  subscribeSharedCollection(
+    name: string,
+    _reader: { id: string; name: string },
+    push: (value: unknown[]) => void,
+    _fail: (message: string) => void,
+  ): () => void {
+    if (this.embedded && this.host.subscribeShared) {
+      return this.host.subscribeShared(name, _reader, push, _fail) ?? (() => {});
+    }
+    let hub = this.sharedHubs.get(name);
+    if (!hub) {
+      hub = { subs: new Set(), latest: null };
+      this.sharedHubs.set(name, hub);
+    }
+    const sub: SharedSub = { push, fail: _fail };
+    hub.subs.add(sub);
+    if (hub.latest) {
+      try {
+        push(hub.latest);
+      } catch {
+        // A subscriber never breaks the hub.
+      }
+    }
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      hub!.subs.delete(sub);
+    };
+  }
+
+  /** Sets the owned collection and fans it out (the shell's recompute calls this). */
+  setShared(name: string, value: unknown[]): void {
+    let hub = this.sharedHubs.get(name);
+    if (!hub) {
+      hub = { subs: new Set(), latest: null };
+      this.sharedHubs.set(name, hub);
+    }
+    const sig = JSON.stringify(value);
+    if (hub.latest && JSON.stringify(hub.latest) === sig) return;
+    hub.latest = value;
+    const local = this.sharedSignals.get(name);
+    if (local) local.set(value);
+    for (const s of [...hub.subs]) {
+      try {
+        s.push(value);
+      } catch {
+        // A subscriber never breaks the hub.
+      }
+    }
+  }
+
+  private stopSharedLocal(): void {
+    for (const stop of this.sharedSources.values()) {
+      try {
+        stop();
+      } catch {
+        // Stopping never fails the app.
+      }
+    }
+    this.sharedSources.clear();
+    this.sharedSignals.clear();
   }
 
   /**
@@ -995,6 +1196,7 @@ export class Runtime {
       // Intermediate app containers only forward the already-authorized subscription.
       subscribeLocation: (push, fail) => this.subscribeLocation(push, fail),
       subscribeHeading: (push, fail) => this.subscribeHeading(push, fail),
+      subscribeShared: (name, reader, push, fail) => this.subscribeSharedCollection(name, reader, push, fail),
       db: this.host.db,
       secrets: this.host.secrets,
       now: this.host.now && (() => this.host.now!()),
@@ -1538,6 +1740,7 @@ export class Runtime {
     this.scrollOffsets.delete(n.id);
     this.textStyles.delete(n);
     this.updates.delete(n);
+    this.buttonPads.delete(n.id);
     for (const c of n.children) this.destroy(c);
   }
 
@@ -1554,7 +1757,8 @@ export class Runtime {
       case "text":
         return this.measureText(str(n.props.value), n, maxW);
       case "button":
-        return this.measureText(str(n.props.label), n, maxW);
+        // A button's label is one line: it gives up padding before it ever wraps.
+        return this.measureText(str(n.props.label), n, Infinity);
       case "textfield": {
         const ts = this.textStyles.get(n) ?? TYPOGRAPHY.body;
         return { width: Math.min(maxW, 160), height: ts.lineHeight };
@@ -1596,6 +1800,48 @@ export class Runtime {
       this.controlSizes.set(type, s);
     }
     return s;
+  }
+
+  /**
+   * Matches the padding the host draws with to the button's final width: when a row
+   * shrank a button below its natural width, its left/right padding gives up the
+   * deficit evenly (down to 4 a side) so the one-line label stays centered. Runs
+   * where frames are applied, with no extra layout pass, and only sends a change.
+   */
+  private adjustButtonPadding(): void {
+    for (const node of this.nodes.values()) {
+      if (node.type !== "button" || !node.alive || !node.mounted) continue;
+      const pad = node.box.padding;
+      const labelW = this.measureText(str(node.props.label ?? ""), node, Infinity).width;
+      const natural = labelW + pad[1] + pad[3];
+      const finalW = node.frame[2];
+      let want: [number, number, number, number];
+      if (finalW < natural - 1e-6) {
+        // What's left beside the label (and inside a border) is split in the original
+        // padding's proportion, at least 4 a side.
+        const border = Number((node.props.style as Record<string, unknown> | undefined)?.borderWidth ?? 0) || 0;
+        const room = Math.max(8, finalW - labelW - 2 * border);
+        const share = pad[1] + pad[3] > 0 ? pad[3] / (pad[1] + pad[3]) : 0.5;
+        const left = Math.round(Math.min(Math.max(4, room * share), room - 4) * 4) / 4;
+        const right = Math.round((room - left) * 4) / 4;
+        want = [pad[0], right, pad[2], left];
+      } else {
+        want = [pad[0], pad[1], pad[2], pad[3]];
+      }
+      const style = node.props.style as Record<string, unknown> | undefined;
+      const cur = (this.buttonPads.get(node.id) ?? (style?.padding as [number, number, number, number] | undefined) ?? pad) as [
+        number,
+        number,
+        number,
+        number,
+      ];
+      if (cur[0] === want[0] && cur[1] === want[1] && cur[2] === want[2] && cur[3] === want[3]) continue;
+      let u = this.updates.get(node);
+      if (!u) this.updates.set(node, (u = {}));
+      u.style = { ...((u.style as Record<string, unknown>) ?? {}), padding: [...want] };
+      this.buttonPads.set(node.id, [...want] as [number, number, number, number]);
+    }
+    for (const id of [...this.buttonPads.keys()]) if (!this.nodes.has(id)) this.buttonPads.delete(id);
   }
 
   private measureText(text: string, n: ViewNode, maxW: number): Size {
@@ -1981,6 +2227,11 @@ export class Runtime {
   /** Writes `value` at `path`: a state/data key, or a field of a loop variable. */
   private assign(path: string, scope: Scope, value: unknown): void {
     const { root: name, segs } = compilePath(path);
+    // Shared collections are read-only: only the publishing app writes its own list.
+    if (name === "shared" && !this.signals.has("shared")) {
+      this.error(`assign ${path}`, `'shared' is read-only`);
+      return;
+    }
     const keys = segs.map((s) => s(scope));
     const sig = this.signals.get(name);
     const local = untrack(() => scope.lookup(name));
@@ -2066,6 +2317,8 @@ export class Runtime {
 
   private save(): void {
     this.saveRequested = false;
+    // The shell recomputes shared collections when an app could have changed.
+    this.dataVersion++;
     if (this.store) {
       const values = new Map<string, unknown>();
       for (const k of this.dataKeys) if (!this.secretKeys.has(k)) values.set(k, this.signals.get(k)?.peek());

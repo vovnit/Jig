@@ -238,6 +238,28 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
             description: `what of the container the app uses: ${Object.keys(CAPABILITIES).join(", ")}`,
             items: { enum: Object.keys(CAPABILITIES) },
           },
+          publish: {
+            type: "object",
+            title: "publish",
+            description: "named lists other apps may read as shared.<name>",
+            additionalProperties: {
+              type: "object",
+              title: "publication",
+              required: ["from"],
+              additionalProperties: false,
+              properties: {
+                from: { type: "string", description: "one of the app's own list data keys" },
+                doc: { type: "string" },
+                fields: { type: "array", items: { type: "string" } },
+              },
+            },
+          },
+          read: {
+            type: "array",
+            title: "read",
+            description: "named collections this app reads as shared.<name>",
+            items: { type: "string" },
+          },
           schedule: { type: "object", additionalProperties: {
             type: "object", required: ["at"], additionalProperties: false,
             properties: {

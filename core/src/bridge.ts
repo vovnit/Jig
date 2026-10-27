@@ -97,6 +97,17 @@ export interface Host {
   subscribeLocation?: (push: (update: Record<string, unknown>) => void, fail: (message: string) => void) => () => void;
   subscribeHeading?: (push: (update: Record<string, unknown>) => void, fail: (message: string) => void) => () => void;
   /**
+   * Shares the top-level runtime's shared collections with an embedded app (see
+   * `subscribeSharedCollection`): the shell owns each list, readers subscribe
+   * through their parent. `reader` is the reading app's spec (for forwarding).
+   */
+  subscribeShared?: (
+    name: string,
+    reader: { id: string; name: string },
+    push: (value: unknown[]) => void,
+    fail: (message: string) => void,
+  ) => () => void;
+  /**
    * Starts an asynchronous host service and calls `done` with its result (on the runtime's
    * thread) or an error message. Only the trusted shell reaches it. Services:
    * - `http` {url, method?, headers?, body?, stream?} → {status, body}. With `stream: true`

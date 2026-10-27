@@ -1,4 +1,5 @@
 import type { Runtime } from '../runtime.ts';
+import { mergePublishers, projectPublisher } from '../shared.ts';
 import { DataStore } from '../store.ts';
 import { occurrences } from '../schedule.ts';
 import type { AppSpec } from '../spec.ts';
@@ -15,6 +16,8 @@ export function installBackground(shell: Runtime): void {
   const widgetData = new Map<string, string>();
   const widgetMinute = new Map<string, number>();
   const widgetSent = new Map<string, string>();
+  // Shared collections: recomputed only when the app list or a running app's data could have changed.
+  const sharedState = { appsSig: "", versions: new Map<string, number | null>(), known: new Set<string>() };
   const sync = () => {
     const apps = (shell.get('apps') as AppEntry[] | undefined) ?? [];
     const ids = new Set(apps.map(a => a.id));
@@ -62,6 +65,7 @@ export function installBackground(shell: Runtime): void {
       }
     }
     syncWidgets(shell, apps, current, all, widgetData, widgetMinute, widgetSent);
+    syncShared(shell, apps, current, all, sharedState);
   };
   shell.onFrame = sync;
   shell.onLocation = location => { shell.set('lastLocation', location); };
@@ -70,6 +74,60 @@ export function installBackground(shell: Runtime): void {
 function runningChild(current: { screen: string; params?: Record<string, unknown> } | undefined, all: Runtime[], id: string): Runtime | undefined {
   if (current?.screen === 'run' && current.params?.id === id) return all.find(r => r.spec.id === id);
   return undefined;
+}
+
+/**
+ * Recomputes every shared collection from the apps that publish it: running apps
+ * contribute their live data (so changes show at once), closed apps their stored
+ * data. Cheap: nothing is read until the app list or a running app's version changed.
+ */
+function syncShared(
+  shell: Runtime,
+  apps: AppEntry[],
+  current: { screen: string; params?: Record<string, unknown> } | undefined,
+  all: Runtime[],
+  state: { appsSig: string; versions: Map<string, number | null>; known: Set<string> },
+): void {
+  const appsSig = JSON.stringify(apps.map(a => ({ id: a.id, name: a.spec.name, publish: a.spec.publish })));
+  const versions = new Map<string, number | null>();
+  for (const { id } of apps) {
+    const running = runningChild(current, all, id) ?? all.find(r => r.spec?.id === id);
+    versions.set(id, running ? running.dataVersion : null);
+  }
+  let changed = appsSig !== state.appsSig;
+  if (!changed) {
+    if (state.versions.size !== versions.size) changed = true;
+    else for (const [id, v] of versions) if (state.versions.get(id) !== v) { changed = true; break; }
+  }
+  if (!changed) return;
+  state.appsSig = appsSig;
+  state.versions = versions;
+  const names = new Set<string>(state.known);
+  for (const { spec } of apps) for (const n of Object.keys(spec.publish ?? {})) names.add(n);
+  for (const name of names) {
+    const pubs: { spec: AppSpec; items: Record<string, unknown>[] }[] = [];
+    for (const { id, spec } of apps) {
+      if (!spec.publish?.[name]) continue;
+      const running = runningChild(current, all, id) ?? all.find(r => r.spec?.id === id);
+      let data: Record<string, unknown>;
+      try {
+        data = running?.snapshot() ?? stored(spec, shell);
+      } catch {
+        continue;
+      }
+      try {
+        pubs.push({ spec, items: projectPublisher(spec, data, name) });
+      } catch {
+        continue;
+      }
+    }
+    state.known.add(name);
+    try {
+      shell.setShared(name, mergePublishers(pubs));
+    } catch {
+      // A collection never breaks the frame.
+    }
+  }
 }
 
 /**

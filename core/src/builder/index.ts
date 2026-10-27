@@ -4,6 +4,7 @@ import { installBackground } from "./background.ts";
 // `log` (the conversation), `busy`, and the app list itself (each edit is saved there).
 import type { Runtime } from "../runtime.ts";
 import type { AppSpec } from "../spec.ts";
+import { formatCollections } from "../shared.ts";
 import { CAPABILITIES } from "../spec.ts";
 import { type AgentDeps, type BuilderView, type EditRequest, type LogEntry, runEdit } from "./agent.ts";
 import { addApp, commitEdit, findApp, redoEdit, undoEdit } from "./registry.ts";
@@ -38,6 +39,7 @@ export function installBuilder(shell: Runtime): void {
       const screens = Object.keys(spec?.screens ?? {});
       return { screen: shown ?? spec?.start ?? screens[0] ?? "", screens, selected: (shell.get("selected") as BuilderView["selected"]) ?? null };
     },
+    collections: () => formatCollections(((shell.get("apps") as { id: string; spec: AppSpec }[] | undefined) ?? [])),
     log,
     update,
     status: (text) => shell.set("status", text),
@@ -152,6 +154,15 @@ function installGate(shell: Runtime): void {
   /** Questions in order: the first is the one on screen (`asking`). */
   const queue: { app: string; appName: string; capability: string; text: string }[] = [];
   const key = (app: string, capability: string) => `${app} ${capability}`;
+  const sharedText = (app: AppSpec, capability: string): string | null => {
+    if (!capability.startsWith("shared.")) return null;
+    const name = capability.slice("shared.".length);
+    const apps = (shell.get("apps") as { id: string; spec: AppSpec }[] | undefined) ?? [];
+    const pubs = apps.filter((a) => a.spec.publish?.[name]);
+    // The collection's name reads as a noun ("your workouts"); a publisher's doc may not.
+    const from = pubs.map((p) => p.spec.name).join(", ") || "no apps yet";
+    return `${app.name} wants to read your ${name} from ${from}.`;
+  };
   shell.gate = (app, capability) => {
     const prior = grantsOf(shell)[app.id]?.[capability];
     if (prior !== undefined) return Promise.resolve(prior);
@@ -160,7 +171,7 @@ function installGate(shell: Runtime): void {
     if (pending) return new Promise<boolean>((resolve) => pending.push(resolve));
     const resolvers: ((allow: boolean) => void)[] = [];
     waiting.set(k, resolvers);
-    const question = { app: app.id, appName: app.name, capability, text: `${app.name} wants to ${CAPABILITIES[capability]?.doc ?? capability}.` };
+    const question = { app: app.id, appName: app.name, capability, text: sharedText(app, capability) ?? `${app.name} wants to ${CAPABILITIES[capability]?.doc ?? capability}.` };
     queue.push(question);
     // The first question goes on screen; the rest wait their turn.
     if (queue.length === 1) shell.set("asking", question);

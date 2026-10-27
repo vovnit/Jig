@@ -9,7 +9,7 @@ export { DataStore } from "./store.ts";
 export type { FrameStats, RuntimeError } from "./runtime.ts";
 export type { Host, Op, Props, Size, Database, SecretStore, SqlValue, Statement, TextMeasureStyle, HostEvent } from "./bridge.ts";
 export type { TextSpanStyle } from "./bridge.ts";
-export type { AppSpec, NodeSpec, ListSpec, ScreenSpec, FieldSpec, Action, Actions, ColorScheme, ScreenTransition, ValueTransition, WidgetSpec, WidgetSizeName } from "./spec.ts";
+export type { AppSpec, NodeSpec, ListSpec, ScreenSpec, FieldSpec, PublishSpec, Action, Actions, ColorScheme, ScreenTransition, ValueTransition, WidgetSpec, WidgetSizeName } from "./spec.ts";
 export { DEFAULT_THEME, DARK_THEME, TYPOGRAPHY, FONT_FAMILY, resolveTheme, WIDGET_SIZES } from "./spec.ts";
 export { CAPABILITIES, ASYNC_ACTIONS, registerAsyncAction, unregisterAsyncAction } from "./spec.ts";
 export type { CapabilityInfo, AsyncActionInfo } from "./spec.ts";
@@ -17,6 +17,7 @@ export { SHAPES, BUILTIN_COMPONENTS } from "./builtins.ts";
 export { compile, compileTemplate, evaluate, freeIdentifiers, BUILTINS } from "./expr.ts";
 
 export { openApp } from "./builder/background.ts";
+export { deviceCollections, formatCollections } from "./shared.ts";
 export { occurrences } from "./schedule.ts";
 export { parseXml, unescapeEntities, descendants, child, textOf } from "./xml.ts";
 export type { XmlNode, XmlElement, XmlText } from "./xml.ts";

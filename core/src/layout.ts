@@ -392,14 +392,53 @@ function layoutFlex(
   } else if (free < 0) {
     // As CSS `min-height: auto`: in a column only scroll views shrink below their content by default,
     // so a long scroll body never squeezes a header. In a row, items shrink so text can wrap.
+    // A button never wraps: it gives up its own horizontal padding first, evenly on both
+    // sides down to 4pt, so its minimum is its label plus 8 (plus border, if any).
     const defaultShrink = (n: ViewNode) => (row || n.type === "scroll" || n.type === "hscroll" ? 1 : 0);
     const weight = (p: ChildPlan) => (p.mainFixed && p.node.box.shrink === undefined ? 0 : (p.node.box.shrink ?? defaultShrink(p.node)) * p.basis);
-    const total = plans.reduce((a, p) => a + weight(p), 0);
-    if (total > 0) {
-      for (const p of plans) {
-        const cb = p.node.box;
-        p.main = clamp(p.basis + (free * weight(p)) / total, row ? cb.minWidth : cb.minHeight, undefined);
+    const minOf = (p: ChildPlan): number => {
+      const cb = p.node.box;
+      if (row && p.node.type === "button") {
+        const padX = cb.padding[1] + cb.padding[3];
+        const content = p.mainFixed
+          ? Math.max(0, mainOf(measure(p.node, Infinity, false, p.cross, p.crossExact, false)) - padX)
+          : Math.max(0, p.basis - padX);
+        let border = 0;
+        const style = p.node.props.style as Record<string, unknown> | undefined;
+        const bw = style ? Number(style.borderWidth) : NaN;
+        if (Number.isFinite(bw) && (bw as number) > 0) border = (bw as number) * 2;
+        return Math.max(cb.minWidth ?? 0, content + 8 + border);
       }
+      return (row ? cb.minWidth : cb.minHeight) ?? 0;
+    };
+    // CSS-style: freeze items that hit their minimum and redistribute among the rest.
+    const mins = new Map<ChildPlan, number>();
+    for (const p of plans) {
+      p.main = p.basis;
+      mins.set(p, minOf(p));
+    }
+    let unfrozen = plans.filter((p) => weight(p) > 0);
+    for (;;) {
+      const total = unfrozen.reduce((a, p) => a + weight(p), 0);
+      if (total <= 0 || unfrozen.length === 0) break;
+      const usedNow = plans.reduce((a, p) => a + p.main + marginMain(p.node), 0) + gaps;
+      const remaining = innerMain - usedNow;
+      if (remaining >= 0) break;
+      const tent = new Map<ChildPlan, number>();
+      for (const p of unfrozen) tent.set(p, p.basis + (remaining * weight(p)) / total);
+      const still: ChildPlan[] = [];
+      let froze = false;
+      for (const p of unfrozen) {
+        if (tent.get(p)! < mins.get(p)! - 1e-9) {
+          p.main = mins.get(p)!;
+          froze = true;
+        } else still.push(p);
+      }
+      if (!froze) {
+        for (const p of unfrozen) p.main = Math.max(tent.get(p)!, mins.get(p)!);
+        break;
+      }
+      unfrozen = still;
     }
   }
 

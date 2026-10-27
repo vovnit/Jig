@@ -53,6 +53,8 @@ export interface AgentDeps {
   /** Saves a validated spec (with undo history); the preview hot-reloads. */
   commit: (spec: AppSpec) => void;
   view: () => BuilderView;
+  /** The collections published on this device, for the model's context. */
+  collections?: () => string;
   /** A PNG of a screen as it renders now, base64; absent where the host can't take one. */
   screenshot?: (screen?: string) => Promise<string | null>;
   /** Adds an entry to the log and returns its id. */
@@ -191,7 +193,8 @@ export async function runEdit(deps: AgentDeps, request: EditRequest): Promise<Ed
     }
     deps.log({ role: "user", text: `“${text}”` });
   }
-  const context = `Current spec:\n\`\`\`json\n${JSON.stringify(deps.getSpec())}\n\`\`\`\n${viewText(deps.view())}`;
+  const shared = deps.collections?.() ?? "";
+  const context = `Current spec:\n\`\`\`json\n${JSON.stringify(deps.getSpec())}\n\`\`\`\n${viewText(deps.view())}${shared ? `\nShared collections on this device:\n${shared}` : ""}`;
   const lead = request.continueFrom ? "You ran out of steps last time; carry on from where you stopped. " : "";
   const conversation: unknown[] = [
     ...(request.continueFrom ?? []),

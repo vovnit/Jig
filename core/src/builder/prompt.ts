@@ -78,6 +78,10 @@ An app declares what of the container it uses: "capabilities": ["clock"]. Readin
 ${capabilities()}
 - Sun: with location, sunTimes(location.lat, location.lon, today()) gives today's sunrise and sunset there, and sunPosition(location.lat, location.lon, now()) the sun's place now; read them only once location isn't null.
 
+## Shared data
+Apps publish lists for other apps, which read them with the user's permission: only a container can share data this way.
+Publisher: "data": {"log": {"type": "list", "fields": {"id": "string", "day": "date", "kind": "string", "minutes": "number", "calories": "number"}}}, "publish": {"workouts": {"from": "log", "doc": "Workouts I logged", "fields": ["day", "kind", "minutes", "calories"]}}. Reader: "read": ["workouts"], then {{shared.workouts}} is the live list across every app that publishes it (published fields plus app and appName, sorted by publisher). "from" is one of the app's own list data keys (not secret); "fields" defaults to all non-secret fields. Collection names are lowercase words; several apps may publish the same one. Reading shared.<name> needs <name> in "read", and shared data is read-only. The context lists this device's collections: use "read" and shared.<name> when the user asks for something that uses data from another app.
+
 ## Widgets
 Home-screen widgets show the app's own data on the user's own home screen: no capability, no permission prompt.
 {"widgets": {"today": {"title": "Chores today", "sizes": ["small", "medium"], "body": {"type": "column", "children": [...]}, "open": "main"}}}

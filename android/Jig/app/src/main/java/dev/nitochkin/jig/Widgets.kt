@@ -47,6 +47,11 @@ object WidgetStore {
 
     private val io = Executors.newSingleThreadExecutor()
 
+    /** Widget PNG reads share the `set` queue, so a read never races a write. */
+    fun onIo(task: () -> Unit) {
+        io.execute(task)
+    }
+
     /** Widget sizes in points, as the core renders them (see `WIDGET_SIZES`). */
     private val sizes = mapOf("small" to (158 to 158), "medium" to (338 to 158), "large" to (338 to 354))
 
@@ -81,7 +86,7 @@ object WidgetStore {
         runCatching { catalogFile(context).writeText(array.toString()) }
     }
 
-    fun choiceKey(appWidgetId: Int) = "choice_$appWidgetId"
+    private fun choiceKey(appWidgetId: Int) = "choice_$appWidgetId"
 
     fun choice(context: Context, appWidgetId: Int): String? =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(choiceKey(appWidgetId), null)
@@ -112,6 +117,7 @@ object WidgetStore {
         // One row per app widget: a widget at several sizes shares its id (as on iOS).
         val merged = LinkedHashMap<String, JSONObject>()
         val kept = HashSet<String>()
+        val written = HashSet<String>()
         val density = context.resources.displayMetrics.density
         for (i in 0 until widgets.length()) {
             val w = widgets.optJSONObject(i) ?: continue
@@ -142,14 +148,21 @@ object WidgetStore {
                     val file = "$id-$size-$j-$theme.png"
                     drawEntry(context, e.optJSONObject(theme) ?: JSONObject(), dims.first, dims.second, density, theme == "dark", File(dir(context), file))
                     record.put(theme, file)
+                    written.add(file)
                 }
                 saved.put(record)
             }
-            File(dir(context), "$id-$size.json").writeText(saved.toString())
+            val entriesName = "$id-$size.json"
+            File(dir(context), entriesName).writeText(saved.toString())
+            written.add(entriesName)
         }
         // `widgets: []` (or a dropped widget) removes that app's rows and files.
         for (old in previous) {
             if (old !in kept) dir(context).listFiles()?.forEach { if (it.name.startsWith("$old-")) runCatching { it.delete() } }
+        }
+        // A kept widget may have lost a size or entries: drop files this update didn't write.
+        for (id in kept) {
+            dir(context).listFiles()?.forEach { if (it.name.startsWith("$id-") && it.name !in written) runCatching { it.delete() } }
         }
         rows.addAll(merged.values)
         saveCatalog(context, rows)
@@ -307,7 +320,14 @@ object WidgetStore {
             }
             else -> null
         } ?: return
-        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return
+        // Downsample to the frame: a photo must not decode whole for a small widget.
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        val maxWidth = (frame.width() * 2).roundToInt().coerceAtLeast(1)
+        val maxHeight = (frame.height() * 2).roundToInt().coerceAtLeast(1)
+        var sample = 1
+        while (bounds.outWidth / sample > maxWidth || bounds.outHeight / sample > maxHeight) sample *= 2
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return
         canvas.drawBitmap(bitmap, null, frame, Paint(Paint.FILTER_BITMAP_FLAG))
         bitmap.recycle()
     }
@@ -398,6 +418,12 @@ class JigWidgetProvider : AppWidgetProvider() {
 
     companion object {
         fun updateWidget(context: Context, appWidgetId: Int) {
+            // The PNG decode stays off the caller's thread (main from onUpdate and the config activity).
+            val appContext = context.applicationContext ?: context
+            WidgetStore.onIo { updateNow(appContext, appWidgetId) }
+        }
+
+        private fun updateNow(context: Context, appWidgetId: Int) {
             val manager = AppWidgetManager.getInstance(context)
             val views = RemoteViews(context.packageName, R.layout.widget_jig)
             val row = WidgetStore.choice(context, appWidgetId)?.let { WidgetStore.row(context, it) }

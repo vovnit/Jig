@@ -1,0 +1,79 @@
+{
+  "id": "workouts",
+  "name": "Workout log",
+  "description": "Log workouts and share them with your meal planner.",
+  "theme": { "accent": "#e8590c" },
+  "data": {
+    "log": {
+      "type": "list",
+      "fields": { "id": "string", "day": "date", "kind": "string", "minutes": "number", "calories": "number" },
+      "default": []
+    }
+  },
+  "state": { "kind": "run", "minutes": 30 },
+  "publish": {
+    "workouts": { "from": "log", "doc": "Workouts I logged", "fields": ["day", "kind", "minutes", "calories"] }
+  },
+  "screens": {
+    "main": {
+      "title": "Workout log",
+      "body": {
+        "type": "column",
+        "style": { "gap": 16 },
+        "children": [
+          {
+            "type": "card",
+            "children": [
+              { "type": "text", "variant": "headline", "value": "Today" },
+              { "type": "text", "variant": "callout", "value": "{{sum(filter(log, w => w.day == today()), 'minutes')}} min · {{sum(filter(log, w => w.day == today()), 'calories')}} kcal", "style": { "color": "muted" } }
+            ]
+          },
+          {
+            "type": "row",
+            "style": { "gap": 8 },
+            "children": [
+              { "type": "button", "variant": "{{kind == 'run' ? 'primary' : 'secondary'}}", "label": "Run", "style": { "grow": 1 }, "onTap": { "set": "kind", "to": "'run'" } },
+              { "type": "button", "variant": "{{kind == 'ride' ? 'primary' : 'secondary'}}", "label": "Ride", "style": { "grow": 1 }, "onTap": { "set": "kind", "to": "'ride'" } },
+              { "type": "button", "variant": "{{kind == 'swim' ? 'primary' : 'secondary'}}", "label": "Swim", "style": { "grow": 1 }, "onTap": { "set": "kind", "to": "'swim'" } },
+              { "type": "button", "variant": "{{kind == 'strength' ? 'primary' : 'secondary'}}", "label": "Lift", "style": { "grow": 1 }, "onTap": { "set": "kind", "to": "'strength'" } },
+              { "type": "button", "variant": "{{kind == 'walk' ? 'primary' : 'secondary'}}", "label": "Walk", "style": { "grow": 1 }, "onTap": { "set": "kind", "to": "'walk'" } }
+            ]
+          },
+          {
+            "type": "column",
+            "style": { "gap": 4 },
+            "children": [
+              { "type": "text", "value": "Minutes: {{minutes}}" },
+              { "type": "slider", "bind": "minutes", "min": 5, "max": 120, "step": 5 },
+              { "type": "text", "variant": "callout", "value": "About {{minutes * (kind == 'run' ? 10 : (kind == 'ride' ? 8 : (kind == 'swim' ? 11 : (kind == 'strength' ? 6 : 4))))}} kcal", "style": { "color": "muted" } }
+            ]
+          },
+          {
+            "type": "button",
+            "label": "Log workout",
+            "onTap": {
+              "push": "log",
+              "value": { "id": "uid()", "day": "today()", "kind": "kind", "minutes": "minutes", "calories": "minutes * (kind == 'run' ? 10 : (kind == 'ride' ? 8 : (kind == 'swim' ? 11 : (kind == 'strength' ? 6 : 4))))" }
+            }
+          },
+          {
+            "type": "list",
+            "header": "Recent workouts",
+            "items": "reverse(log)",
+            "as": "w",
+            "empty": "No workouts yet. Log one above.",
+            "swipe": [{ "label": "Delete", "do": { "remove": "w" } }],
+            "row": {
+              "type": "column",
+              "style": { "gap": 2 },
+              "children": [
+                { "type": "text", "variant": "headline", "value": "{{w.kind}} · {{w.minutes}} min" },
+                { "type": "text", "variant": "caption", "value": "{{w.calories}} kcal · {{formatDate(w.day, 'EEE, MMM d')}}" }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

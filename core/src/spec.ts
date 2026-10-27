@@ -135,6 +135,15 @@ export interface ScriptSpec {
   elements: string[];
 }
 
+export interface PublishSpec {
+  /** One of the app's own `list` data keys (not secret). */
+  from: string;
+  /** What readers are told they read, e.g. "Workouts I logged". */
+  doc?: string;
+  /** Item fields other apps see (default: all non-secret fields). */
+  fields?: string[];
+}
+
 export interface AppSpec {
   id: string;
   name: string;
@@ -149,6 +158,10 @@ export interface AppSpec {
   state?: Record<string, unknown>;
   /** What of the container the app uses (see CAPABILITIES): using more is rejected. */
   capabilities?: string[];
+  /** Named lists this app publishes for other apps (`shared.<name>`). */
+  publish?: Record<string, PublishSpec>;
+  /** Named collections this app reads as `shared.<name>`. */
+  read?: string[];
   schedule?: Record<string, ScheduleEntry>;
   /** Home-screen widgets, rendered headlessly into static trees (see widgets.ts). */
   widgets?: Record<string, WidgetSpec>;

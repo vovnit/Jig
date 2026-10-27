@@ -416,7 +416,7 @@
                     "children": [
                       {
                         "type": "text",
-                        "value": "{{cap}}",
+                        "value": "{{slice(cap, 0, 7) == 'shared.' ? 'Read ' + slice(cap, 7) : cap}}",
                         "style": {
                           "grow": 1
                         }

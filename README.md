@@ -120,6 +120,8 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 "data": { "apiKey": { "type": "string", "secret": true } }
 ```
 
+**Shared data.** Apps publish lists as named collections for other apps, read with the user's permission. A workout log publishes `"publish": {"workouts": {"from": "log", "doc": "Workouts I logged", "fields": ["day", "kind", "minutes", "calories"]}}`; a meal planner declares `"read": ["workouts"]` and reads the live list as `{{shared.workouts}}` (published fields plus `app` and `appName`, sorted by publisher). The shell owns each list and asks once per reader and collection; denied readers see an empty list. Secrets never reach it.
+
 **Files.** Large data lives in files, not in rows: a data field of type `file` holds a handle `{id, name, type, size}` (or null), and a list's items may have `file` fields (e.g. books: `{title, file}`). Actions pick files, photos and camera shots into the app's store (`pickFile`, `pickPhoto`, `takePhoto`), read them as text or base64 (`readFile`), delete them (`deleteFile`) and share text, links or files (`share`); an `image`, `video` or `audio` whose `src` is a handle loads `jig-file:<app>/<id>` from that store. Each host keeps the store in the app's sandbox (Origin Private File System on the web), with a small index of the handles, and deleting the app clears its files with `files.clear`.
 
 ### Lists
@@ -265,7 +267,7 @@ After profiling, if needed:
 - [x] Per-app file store, file / photo / camera pickers, sharing
 - [x] EPUB books: zip reading on each host, parsing and chapters in core, styled text with `spans`
 - [x] Home-screen widgets: rendered by the app from the spec, timelines for clock widgets (WidgetKit extension on iOS, an app widget on Android, a preview in the playground)
-- [ ] Shared personal data store with permissions between apps
+- [x] Shared personal data store with permissions between apps
 - [ ] Camera input with SAM 3.1
 - [ ] Icons with Muse Image
 
@@ -275,7 +277,7 @@ After profiling, if needed:
 - [x] Medication log for a parent, with a daily reminder while doses are left
 - [x] Showcase screens for the device (slider, time picker, location, sun times, compass), media and files
 - [x] EPUB reader: a library of books opened from files, each read chapter by chapter as styled text with links, the place in every book remembered
-- [ ] Workout log that feeds a meal planner (shared data store demo)
+- [x] Workout log that feeds a meal planner (shared data store demo)
 - [ ] Pantry inventory from a shelf photo (SAM demo)
 
 ## Plan

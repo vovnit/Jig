@@ -7,6 +7,7 @@ import { TYPE_ALIASES } from "../builtins.ts";
 import { compile, compileTemplate, freeIdentifiers } from "../expr.ts";
 import { Runtime } from "../runtime.ts";
 import { schemaErrors, specSchema } from "../schema.ts";
+import { isCollectionName, isSharedPath, sharedReadsIn } from "../shared.ts";
 import { WIDGET_SIZES } from "../spec.ts";
 import { widgetErrors } from "../widgets.ts";
 import { ASYNC_ACTIONS, CAPABILITIES, COMMON_PROPS, NODE_TYPES, type Action, type AppSpec, type NodeSpec } from "../spec.ts";
@@ -44,6 +45,7 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   }
   // Declared capabilities; using a live value or an async action without its own is rejected.
   const granted = new Set(Array.isArray(s.capabilities) ? s.capabilities : []);
+  const grantedRead = new Set(Array.isArray(s.read) ? (s.read as unknown[]).filter((n): n is string => typeof n === "string") : []);
   // Declared script modules (reserved): `run` names one of their exports, `custom` one of their elements.
   const scripts = s.scripts && typeof s.scripts === "object" ? (s.scripts as Record<string, { exports?: unknown; elements?: unknown }>) : {};
   const scriptExports: string[] = [];
@@ -56,10 +58,64 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   // Names in scope shadow a live value of the same name (the scope reads it first):
   // data and state keys everywhere, loop variables and component `props` where they apply.
   const baseScope = new Set([...Object.keys(s.data ?? {}), ...Object.keys(s.state ?? {})]);
+  // Shared collections this app publishes and reads.
+  if (s.publish && typeof s.publish === "object" && !Array.isArray(s.publish)) {
+    for (const [name, entry] of Object.entries(s.publish)) {
+      if (!isCollectionName(name)) errors.push(`publish.${name}: collection names are lowercase words`);
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const from = (entry as { from?: unknown }).from;
+      if (typeof from !== "string") continue;
+      const def = s.data?.[from];
+      if (!def) errors.push(`publish.${name}.from: no data key '${from}'`);
+      else if (def.type !== "list") errors.push(`publish.${name}.from: '${from}' must be a list data key`);
+      else if (def.secret) errors.push(`publish.${name}.from: '${from}' is secret and can't be published`);
+      else {
+        const fields = (entry as { fields?: unknown }).fields;
+        if (Array.isArray(fields)) {
+          const known = def.fields && typeof def.fields === "object" ? new Set(Object.keys(def.fields)) : null;
+          for (const f of fields) {
+            if (typeof f !== "string") continue;
+            if (known && !known.has(f)) errors.push(`publish.${name}.fields: no field '${f}' in '${from}'`);
+            const field = def.fields?.[f];
+            if (field && typeof field === "object" && field.secret) errors.push(`publish.${name}.fields: '${f}' is secret and can't be published`);
+          }
+        }
+      }
+    }
+  }
+  if (s.read !== undefined) {
+    const list = Array.isArray(s.read) ? s.read : [];
+    list.forEach((n, i) => {
+      if (typeof n !== "string" || !isCollectionName(n)) errors.push(`read[${i}]: collection names are lowercase words (got ${JSON.stringify(n)})`);
+    });
+  }
   const needCap = (where: string, cap: string) => {
     const line = `${where}: uses '${cap}'; add "${cap}" to capabilities`;
     if (!granted.has(cap) && !errors.includes(line)) errors.push(line);
   };
+  /** Requires `read` for the shared collections `src` uses. A scoped `shared` shadows the store. */
+  const needShared = (where: string, src: string, scope: Set<string>) => {
+    if (scope.has("shared")) return;
+    for (const name of sharedReadsIn(src)) {
+      const line = `${where}: uses 'shared.${name}'; add "${name}" to read`;
+      if (!grantedRead.has(name) && !errors.includes(line)) errors.push(line);
+    }
+  };
+  /** Shared collections are read-only. */
+  const needWritable = (where: string, path: unknown, scope: Set<string>) => {
+    if (typeof path !== "string" || !isSharedPath(path) || scope.has("shared")) return;
+    const line = `${where}: 'shared' is read-only`;
+    if (!errors.includes(line)) errors.push(line);
+  };
+  if (s.schedule && typeof s.schedule === "object") {
+    for (const [key, entry] of Object.entries(s.schedule)) {
+      if (!entry || typeof entry !== "object") continue;
+      for (const field of ["at", "title", "body"] as const) {
+        if (typeof entry[field] === "string") needShared(`schedule.${key}.${field}`, entry[field] as string, baseScope);
+      }
+      if (typeof entry.if === "string") needShared(`schedule.${key}.if`, entry.if as string, baseScope);
+    }
+  }
   /** Requires the capabilities of the live values these names use. `now()` reads the clock, but only in a binding. */
   const needLive = (where: string, ids: Iterable<string>, scope: Set<string>, allowNow = true) => {
     const seen = new Set<string>();
@@ -74,8 +130,10 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   };
   /** An action value is an expression string, or an object whose values are expressions. `now()` here is a timestamp. */
   const checkValue = (v: unknown, where: string, scope: Set<string>): void => {
-    if (typeof v === "string") needLive(where, freeIdentifiers(v), scope, false);
-    else if (v && typeof v === "object" && !Array.isArray(v)) {
+    if (typeof v === "string") {
+      needLive(where, freeIdentifiers(v), scope, false);
+      needShared(where, v, scope);
+    } else if (v && typeof v === "object" && !Array.isArray(v)) {
       for (const [k, x] of Object.entries(v)) checkValue(x, `${where}.${k}`, scope);
     }
   };
@@ -104,16 +162,33 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
       else if ("call" in a) errors.push(`${w}: apps can't call container services`);
       else if ("if" in a) {
         const c = a as Extract<Action, { if: string }>;
-        if (typeof c.if === "string") needLive(w, freeIdentifiers(c.if), scope, false);
+        if (typeof c.if === "string") {
+          needLive(w, freeIdentifiers(c.if), scope, false);
+          needShared(w, c.if, scope);
+        }
         if (c.then) checkActions(c.then, `${w}.then`, scope);
         if (c.else) checkActions(c.else, `${w}.else`, scope);
       }
-      if ("set" in a && typeof (a as { to?: unknown }).to !== "undefined") checkValue((a as { to: unknown }).to, `${w}.to`, scope);
-      if ("push" in a && typeof (a as { value?: unknown }).value !== "undefined") checkValue((a as { value: unknown }).value, `${w}.value`, scope);
+      if ("set" in a) {
+        needWritable(w, (a as { set?: unknown }).set, scope);
+        if (typeof (a as { to?: unknown }).to !== "undefined") checkValue((a as { to: unknown }).to, `${w}.to`, scope);
+      }
+      if ("toggle" in a) needWritable(w, (a as { toggle?: unknown }).toggle, scope);
+      if ("push" in a) {
+        needWritable(w, (a as { push?: unknown }).push, scope);
+        if (typeof (a as { value?: unknown }).value !== "undefined") checkValue((a as { value: unknown }).value, `${w}.value`, scope);
+      }
       if ("remove" in a) {
-        const r = a as { at?: unknown; where?: unknown };
-        if (typeof r.at === "string") needLive(`${w}.at`, freeIdentifiers(r.at), scope, false);
-        if (typeof r.where === "string") needLive(`${w}.where`, freeIdentifiers(r.where), scope, false);
+        const r = a as { remove?: unknown; at?: unknown; where?: unknown };
+        needWritable(w, r.remove, scope);
+        if (typeof r.at === "string") {
+          needLive(`${w}.at`, freeIdentifiers(r.at), scope, false);
+          needShared(`${w}.at`, r.at, scope);
+        }
+        if (typeof r.where === "string") {
+          needLive(`${w}.where`, freeIdentifiers(r.where), scope, false);
+          needShared(`${w}.where`, r.where, scope);
+        }
       }
       if ("navigate" in a && (a as { params?: unknown }).params) {
         const params = (a as { params: Record<string, unknown> }).params;
@@ -131,6 +206,7 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
       }
     }
     needLive(where, freeIdentifiers(v), scope, true);
+    needShared(where, v, scope);
   };
   // The schema checks the shapes; this walks every node for what it can't, skipping
   // whatever isn't shaped like a node (the schema has reported it).
@@ -167,9 +243,13 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
     }
     for (const [k, v] of Object.entries(n)) {
       if (k.startsWith("on") && v) checkActions(v, `${where}.${k}`, rowScope ?? inner);
+      else if (k === "bind" && typeof v === "string") needWritable(`${where}.bind`, v, inner);
       else if (k === "style" && v && typeof v === "object" && !Array.isArray(v)) {
         for (const [sk, sv] of Object.entries(v)) {
-          if (typeof sv === "string" && sv.includes("{{")) needLive(`${where}.style.${sk}`, freeIdentifiers(sv), inner, true);
+          if (typeof sv === "string" && sv.includes("{{")) {
+            needLive(`${where}.style.${sk}`, freeIdentifiers(sv), inner, true);
+            needShared(`${where}.style.${sk}`, sv, inner);
+          }
         }
       } else if (k === "props" && v && typeof v === "object" && !Array.isArray(v)) {
         for (const [pk, pv] of Object.entries(v)) {
@@ -177,12 +257,17 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
         }
       } else if (k === "rowStyle" && v && typeof v === "object" && !Array.isArray(v)) {
         for (const [sk, sv] of Object.entries(v)) {
-          if (typeof sv === "string" && sv.includes("{{")) needLive(`${where}.rowStyle.${sk}`, freeIdentifiers(sv), rowScope ?? inner, true);
+          if (typeof sv === "string" && sv.includes("{{")) {
+            needLive(`${where}.rowStyle.${sk}`, freeIdentifiers(sv), rowScope ?? inner, true);
+            needShared(`${where}.rowStyle.${sk}`, sv, rowScope ?? inner);
+          }
         }
       } else if (k === "swipe" && Array.isArray(v)) {
         for (const [i, a] of (v as { label?: unknown }[]).entries()) {
-          if (typeof a?.label === "string" && (a.label as string).includes("{{"))
+          if (typeof a?.label === "string" && (a.label as string).includes("{{")) {
             needLive(`${where}.swipe[${i}].label`, freeIdentifiers(a.label as string), rowScope ?? inner, true);
+            needShared(`${where}.swipe[${i}].label`, a.label as string, rowScope ?? inner);
+          }
         }
       } else if (k === "spans" && Array.isArray(v)) {
         // Styled runs: each span's text, color and link may bind.

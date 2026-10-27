@@ -1,0 +1,83 @@
+{
+  "id": "meals",
+  "name": "Meal planner",
+  "description": "Plan meals around the workouts you burned.",
+  "theme": { "accent": "#2f9e44" },
+  "data": {
+    "base": { "type": "number", "default": 2000 },
+    "meals": {
+      "type": "list",
+      "fields": { "id": "string", "day": "date", "name": "string", "calories": "number" },
+      "default": []
+    }
+  },
+  "state": { "mealName": "", "mealCals": "" },
+  "read": ["workouts"],
+  "screens": {
+    "main": {
+      "title": "Meal planner",
+      "body": {
+        "type": "column",
+        "style": { "gap": 16 },
+        "children": [
+          {
+            "type": "card",
+            "children": [
+              { "type": "text", "variant": "headline", "value": "Today" },
+              { "type": "text", "variant": "callout", "value": "Burned {{sum(filter(shared.workouts, w => w.day == today()), 'calories')}} kcal · target {{base + sum(filter(shared.workouts, w => w.day == today()), 'calories')}} kcal", "style": { "color": "muted" } },
+              { "type": "progress", "value": "{{sum(filter(meals, m => m.day == today()), 'calories') / max(1, base + sum(filter(shared.workouts, w => w.day == today()), 'calories'))}}" },
+              { "type": "text", "variant": "caption", "value": "{{sum(filter(meals, m => m.day == today()), 'calories')}} / {{base + sum(filter(shared.workouts, w => w.day == today()), 'calories')}} kcal" },
+              { "type": "text", "variant": "callout", "value": "{{sum(filter(shared.workouts, w => w.day == today()), 'calories') > 0 ? 'You burned ' + sum(filter(shared.workouts, w => w.day == today()), 'calories') + ' kcal today: that is room for a snack.' : 'No workouts yet today.'}}" }
+            ]
+          },
+          {
+            "type": "row",
+            "style": { "alignSelf": "stretch", "align": "center", "gap": 12 },
+            "children": [
+              { "type": "text", "value": "Base target", "style": { "grow": 1 } },
+              { "type": "button", "variant": "secondary", "label": "−", "style": { "width": 44 }, "onTap": { "set": "base", "to": "max(1200, base - 100)" } },
+              { "type": "text", "variant": "headline", "value": "{{base}}", "style": { "width": 56, "textAlign": "center" } },
+              { "type": "button", "variant": "secondary", "label": "+", "style": { "width": 44 }, "onTap": { "set": "base", "to": "base + 100" } }
+            ]
+          },
+          {
+            "type": "row",
+            "style": { "gap": 8, "align": "center" },
+            "children": [
+              { "type": "textfield", "placeholder": "Meal", "bind": "mealName" },
+              { "type": "textfield", "placeholder": "kcal", "keyboard": "number", "bind": "mealCals", "style": { "width": 80 } },
+              {
+                "type": "button",
+                "label": "Add",
+                "onTap": {
+                  "if": "trim(mealName) != ''",
+                  "then": [
+                    { "push": "meals", "value": { "id": "uid()", "day": "today()", "name": "trim(mealName)", "calories": "num(mealCals)" } },
+                    { "set": "mealName", "to": "''" },
+                    { "set": "mealCals", "to": "''" }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "header": "Meals today",
+            "items": "reverse(filter(meals, m => m.day == today()))",
+            "as": "meal",
+            "empty": "No meals yet. Add one above.",
+            "swipe": [{ "label": "Delete", "do": { "remove": "meal" } }],
+            "row": {
+              "type": "row",
+              "style": { "justify": "between" },
+              "children": [
+                { "type": "text", "value": "{{meal.name}}", "style": { "grow": 1 } },
+                { "type": "text", "value": "{{meal.calories}} kcal", "style": { "color": "muted" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
