@@ -1,8 +1,10 @@
+import { installBackground } from "./background.ts";
 // The builder's services, which the trusted shell spec calls: `{"call": "builder.edit",
 // "args": {"id": "app.id"}}`. They run the agent and report through the shell's state:
 // `log` (the conversation), `busy`, and the app list itself (each edit is saved there).
 import type { Runtime } from "../runtime.ts";
 import type { AppSpec } from "../spec.ts";
+import { CAPABILITIES } from "../spec.ts";
 import { type AgentDeps, type BuilderView, type EditRequest, type LogEntry, runEdit } from "./agent.ts";
 import { addApp, commitEdit, findApp, redoEdit, undoEdit } from "./registry.ts";
 
@@ -128,4 +130,64 @@ export function installBuilder(shell: Runtime): void {
   shell.services.set("builder.undo", (args) => undoEdit(shell, String(args.id ?? "")));
   shell.services.set("builder.redo", (args) => redoEdit(shell, String(args.id ?? "")));
   shell.services.set("builder.clear", () => shell.set("log", []));
+
+  installGate(shell);
+  installBackground(shell);
+}
+
+/** Stored answers, by app: `grants[appId][capability]` is what the user said. */
+type Grants = Record<string, Record<string, boolean>>;
+
+const grantsOf = (shell: Runtime): Grants => (shell.get("grants") as Grants | undefined) ?? {};
+
+/**
+ * The permission gate: a stored answer allows or denies; otherwise the shell asks once and
+ * remembers. Requests for the same app and capability share one question; different ones
+ * queue and are asked one after another. A capability with `asks: false` never reaches
+ * here (the runtime allows it).
+ */
+function installGate(shell: Runtime): void {
+  /** Resolvers waiting for each question, by `app capability`. */
+  const waiting = new Map<string, ((allow: boolean) => void)[]>();
+  /** Questions in order: the first is the one on screen (`asking`). */
+  const queue: { app: string; appName: string; capability: string; text: string }[] = [];
+  const key = (app: string, capability: string) => `${app} ${capability}`;
+  shell.gate = (app, capability) => {
+    const prior = grantsOf(shell)[app.id]?.[capability];
+    if (prior !== undefined) return Promise.resolve(prior);
+    const k = key(app.id, capability);
+    const pending = waiting.get(k);
+    if (pending) return new Promise<boolean>((resolve) => pending.push(resolve));
+    const resolvers: ((allow: boolean) => void)[] = [];
+    waiting.set(k, resolvers);
+    const question = { app: app.id, appName: app.name, capability, text: `${app.name} wants to ${CAPABILITIES[capability]?.doc ?? capability}.` };
+    queue.push(question);
+    // The first question goes on screen; the rest wait their turn.
+    if (queue.length === 1) shell.set("asking", question);
+    return new Promise<boolean>((resolve) => resolvers.push(resolve));
+  };
+  shell.services.set("builder.answer", (args) => {
+    const asking = shell.get("asking") as { app: string; capability: string } | null;
+    if (!asking) return;
+    const cur = queue.shift();
+    if (!cur) return;
+    const allow = Boolean(args.allow);
+    shell.set("grants", { ...grantsOf(shell), [cur.app]: { ...grantsOf(shell)[cur.app], [cur.capability]: allow } });
+    const resolvers = waiting.get(key(cur.app, cur.capability)) ?? [];
+    waiting.delete(key(cur.app, cur.capability));
+    shell.set("asking", queue.length ? queue[0] : null);
+    for (const resolve of resolvers) resolve(allow);
+  });
+  shell.services.set("builder.forgetGrant", (args) => {
+    const app = String(args.app ?? "");
+    const capability = String(args.capability ?? "");
+    const caps = grantsOf(shell)[app];
+    if (!app || !capability || caps?.[capability] === undefined) return;
+    const next = { ...caps };
+    delete next[capability];
+    const grants = { ...grantsOf(shell) };
+    if (Object.keys(next).length) grants[app] = next;
+    else delete grants[app];
+    shell.set("grants", grants);
+  });
 }

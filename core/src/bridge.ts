@@ -31,6 +31,19 @@ export interface TextMeasureStyle {
   lineHeight: number;
   /** "mono": the platform's monospaced system font (the builder's code view). */
   fontFamily?: "mono";
+  /**
+   * Styled runs of the text, UTF-16 offsets into it: the host measures the
+   * attributed string exactly as it draws it.
+   */
+  spans?: TextSpanStyle[];
+}
+
+/** One measured run: bold draws (and measures) at weight 700, italic slanted. */
+export interface TextSpanStyle {
+  start: number;
+  end: number;
+  bold: boolean;
+  italic: boolean;
 }
 
 export interface Size {
@@ -67,12 +80,22 @@ export interface Host {
   measureControl?(type: string): Size;
   /** Schedule `cb` before the next paint (rAF, CADisplayLink, Choreographer). */
   requestFrame(cb: () => void): void;
+  /** Call `cb` after `ms` milliseconds (setTimeout, a native timer): live values tick on it. */
+  after?(ms: number, cb: () => void): void;
   /** Persists app `data` (see store.ts). Without it, data lives for the session only. */
   db?: Database;
   /** Holds `secret` data fields. Without it, secrets live for the session only. */
   secrets?: SecretStore;
   now?(): number;
   log?(level: "info" | "warn" | "error", message: string): void;
+  /**
+   * Shares the parent runtime's live watch with an embedded app (see `buildApp`):
+   * the top-level runtime owns the host watch, starts it on the first subscriber,
+   * sends the latest value to a new subscriber at once, and stops it with the last.
+   * Only runtimes whose app declared the capability ever subscribe.
+   */
+  subscribeLocation?: (push: (update: Record<string, unknown>) => void, fail: (message: string) => void) => () => void;
+  subscribeHeading?: (push: (update: Record<string, unknown>) => void, fail: (message: string) => void) => () => void;
   /**
    * Starts an asynchronous host service and calls `done` with its result (on the runtime's
    * thread) or an error message. Only the trusted shell reaches it. Services:

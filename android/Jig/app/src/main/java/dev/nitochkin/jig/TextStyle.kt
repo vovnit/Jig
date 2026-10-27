@@ -11,6 +11,8 @@ import android.text.TextPaint
 import android.text.style.LineHeightSpan
 import kotlin.math.ceil
 import kotlin.math.roundToInt
+import org.json.JSONArray
+import org.json.JSONObject
 
 /**
  * One place that turns the runtime's text metrics into a StaticLayout, so
@@ -31,6 +33,31 @@ object TextStyle {
         paint.typeface = typeface(fontWeight, mono)
     }
 
+    /** One measured run: UTF-16 offsets into the text, like the runtime sends. */
+    data class SpanRun(val start: Int, val end: Int, val bold: Boolean, val italic: Boolean)
+
+    /** The text with its bold/italic runs applied, measured and drawn exactly alike. */
+    fun spanned(text: String, runs: List<SpanRun>): SpannableString {
+        val spanned = SpannableString(text)
+        for (r in runs) {
+            val s = r.start.coerceIn(0, text.length)
+            val e = r.end.coerceIn(0, text.length)
+            if (s >= e) continue
+            if (r.bold) spanned.setSpan(android.text.style.StyleSpan(Typeface.BOLD), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            if (r.italic) spanned.setSpan(android.text.style.StyleSpan(Typeface.ITALIC), s, e, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+        }
+        return spanned
+    }
+
+    /** Styled runs from the runtime's `spans` style; malformed ranges measure nothing. */
+    fun runsOf(spans: JSONArray?): List<SpanRun> {
+        if (spans == null) return emptyList()
+        return (0 until spans.length()).mapNotNull { i ->
+            val o = spans.optJSONObject(i) ?: return@mapNotNull null
+            SpanRun(o.optInt("start"), o.optInt("end"), o.optBoolean("bold"), o.optBoolean("italic"))
+        }
+    }
+
     fun layout(text: CharSequence, paint: TextPaint, lineHeightPx: Int, widthPx: Int, align: Layout.Alignment): StaticLayout {
         val spanned = SpannableString(text)
         spanned.setSpan(FixedLineHeight(lineHeightPx), 0, spanned.length, Spanned.SPAN_INCLUSIVE_INCLUSIVE)
@@ -41,11 +68,12 @@ object TextStyle {
     }
 
     /** Returns (width, height) in dp. Thread-safe: each thread uses its own paint. */
-    fun measure(text: String, fontSize: Double, fontWeight: Int, lineHeight: Double, maxWidth: Double, density: Float, mono: Boolean = false): Pair<Double, Double> {
+    fun measure(text: String, style: JSONObject, maxWidth: Double, density: Float): Pair<Double, Double> {
         val paint = paints.get()!!
-        configure(paint, fontSize, fontWeight, density, mono)
+        configure(paint, style.optDouble("fontSize", 17.0), style.optInt("fontWeight", 400), density, style.optString("fontFamily") == "mono")
         val maxPx = (maxWidth * density).coerceAtMost(1_000_000.0).toInt()
-        val layout = layout(text, paint, (lineHeight * density).roundToInt(), maxPx, Layout.Alignment.ALIGN_NORMAL)
+        val content = spanned(text, runsOf(style.optJSONArray("spans")))
+        val layout = layout(content, paint, (style.optDouble("lineHeight", 22.0) * density).roundToInt(), maxPx, Layout.Alignment.ALIGN_NORMAL)
         var width = 0f
         for (i in 0 until layout.lineCount) width = maxOf(width, layout.getLineWidth(i))
         return ceil(width) / density.toDouble() to layout.height / density.toDouble()

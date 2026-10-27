@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compile, compileTemplate, compilePath, setIn, type Scope } from "../src/expr.ts";
+import { compile, compileTemplate, compilePath, freeIdentifiers, setIn, type Scope } from "../src/expr.ts";
 
 const scope = (vars: Record<string, unknown>): Scope => ({ lookup: (n) => vars[n], has: (n) => n in vars });
 
@@ -63,4 +63,14 @@ test("date helpers", () => {
   assert.equal(compile("addDays('2026-10-30', 3)")(s), "2026-11-02");
   assert.equal(compile("daysBetween('2026-10-01', '2026-10-26')")(s), 25);
   assert.equal(compile("formatDate('2026-10-26', 'EEE, MMM d')")(s), "Mon, Oct 26");
+});
+
+test("compiled functions record the scope names they read", () => {
+  // Nested lambdas reusing a parameter name: only the free names remain.
+  assert.deepEqual([...(compile("map(xs, x => map(x, x => x + y))").reads ?? [])].sort(), ["xs", "y"]);
+  assert.deepEqual(freeIdentifiers("map(xs, x => map(x, x => x + y))").sort(), ["xs", "y"]);
+  assert.deepEqual(freeIdentifiers("Time {{clock}} and {{y}}").sort(), ["clock", "y"]);
+  assert.deepEqual(compile("clock + 1").reads, ["clock"]);
+  // The compiled function is cached with its reads.
+  assert.equal(compile("map(xs, x => map(x, x => x + y))"), compile("map(xs, x => map(x, x => x + y))"));
 });

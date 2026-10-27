@@ -52,6 +52,21 @@ pre.tab { padding: 12px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, mon
 .status { padding: 8px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .status.error { color: #e5484d; }
 
+/* ---------- Widget previews (the web has no home-screen widgets) ---------- */
+#widgets-tab { overflow: auto; padding: 12px; gap: 12px; }
+#widget-controls { display: flex; gap: 4px; align-items: center; padding-bottom: 8px; }
+#widget-controls button { border: 0; background: none; color: var(--muted); padding: 6px 10px; border-radius: 6px; cursor: pointer; }
+#widget-controls button.active { background: var(--line); color: var(--ink); }
+.jig-widget-sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+#widgets { display: flex; flex-direction: column; gap: 16px; }
+.jig-widget-head { font-size: 12px; color: var(--muted); padding-bottom: 6px; }
+.jig-widget-preview { position: relative; overflow: hidden; border-radius: 16px; border: 1px solid var(--line); background: #fff; }
+.jig-widget-preview[data-scheme="dark"] { background: #111316; }
+.jig-wbox, .jig-wtext, .jig-wshape, .jig-wimage { position: absolute; box-sizing: border-box; }
+.jig-wtext { white-space: pre-wrap; overflow-wrap: break-word; font-family: var(--jig-font); }
+.jig-wshape { overflow: visible; }
+.jig-wimage { object-fit: cover; }
+
 @media (max-width: 900px) {
   #app { display: block; }
   .apps, .panel { display: none; }
@@ -77,10 +92,14 @@ pre.tab { padding: 12px; overflow: auto; font: 12px/1.5 ui-monospace, Menlo, mon
 .jig-content { position: relative; }
 .jig-shape { overflow: visible; }
 .jig-image { object-fit: cover; }
+.jig-video { object-fit: contain; background: #000; }
+.jig-audio { overflow: hidden; }
 [data-tappable] { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 [data-tappable]:active { opacity: .7; }
 .jig-toggle { border-radius: 16px; background: var(--jig-off, #d9dce1); cursor: pointer; transition: background .18s; }
 .jig-toggle[aria-checked="true"] { background: var(--jig-accent, #34c759); }
+.jig-slider { accent-color: var(--jig-accent, #3b6ef6); cursor: pointer; }
+.jig-timePicker { accent-color: var(--jig-accent, #3b6ef6); font-size: 17px; color-scheme: inherit; }
 .jig-knob { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,.2); transition: transform .18s; }
 .jig-toggle[aria-checked="true"] .jig-knob { transform: translateX(20px); }
 .jig-probe { position: absolute; left: -100000px; top: 0; visibility: hidden; width: max-content; white-space: pre-wrap; overflow-wrap: break-word; font-family: var(--jig-font); }

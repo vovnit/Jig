@@ -1,0 +1,112 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "agent": {
+    "muse-writer": {
+      "description": "Writes the code for one task handed over by Claude, in its own worktree",
+      "mode": "primary",
+      "model": "meta/muse-spark-1.3",
+      "prompt": "{file:./.opencode/prompts/writer.md}",
+      "permission": {
+        "*": "deny",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny"
+        },
+        "edit": "allow",
+        "bash": {
+          "*": "deny",
+          "npm test*": "allow",
+          "npm run typecheck*": "allow",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "cd *": "allow",
+          "tail*": "allow",
+          "head*": "allow",
+          "grep*": "allow",
+          "wc*": "allow"
+        },
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": "deny"
+      }
+    },
+    "gpt-reviewer": {
+      "description": "Reviews a worktree's changes against the task, without editing",
+      "mode": "primary",
+      "model": "openai/gpt-6.1-sol",
+      "prompt": "{file:./.opencode/prompts/reviewer.md}",
+      "permission": {
+        "*": "deny",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny"
+        },
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "npm test*": "allow",
+          "npm run typecheck*": "allow",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "git log*": "allow",
+          "cd *": "allow",
+          "tail*": "allow",
+          "head*": "allow",
+          "grep*": "allow",
+          "wc*": "allow"
+        },
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": "deny"
+      }
+    },
+    "muse-reviewer": {
+      "description": "Reviews a worktree's changes against the task, without editing (when ChatGPT is unavailable)",
+      "mode": "primary",
+      "model": "meta/muse-spark-1.3",
+      "prompt": "{file:./.opencode/prompts/reviewer.md}",
+      "permission": {
+        "*": "deny",
+        "glob": "allow",
+        "grep": "allow",
+        "list": "allow",
+        "todowrite": "allow",
+        "todoread": "allow",
+        "read": {
+          "*": "allow",
+          "*.env": "deny",
+          "*.env.*": "deny"
+        },
+        "edit": "deny",
+        "bash": {
+          "*": "deny",
+          "npm test*": "allow",
+          "npm run typecheck*": "allow",
+          "git diff*": "allow",
+          "git status*": "allow",
+          "git log*": "allow",
+          "cd *": "allow",
+          "tail*": "allow",
+          "head*": "allow",
+          "grep*": "allow",
+          "wc*": "allow"
+        },
+        "webfetch": "deny",
+        "websearch": "deny",
+        "external_directory": "deny"
+      }
+    }
+  }
+}

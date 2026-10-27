@@ -98,6 +98,7 @@ A spec has `data` (typed and persisted), `state` (transient UI state), `screens`
 - **Built-in composites** (written in the spec format itself): `card`, `progress`, `ring`, `check`.
 - **Structure:** `if`, `each` / `as` / `key`, `bind` for two-way control values.
 - **Actions:** `set`, `toggle`, `push`, `remove`, `navigate` (with params), `back`, `if` / `then` / `else`. Actions run in order, and each sees the state the previous one wrote.
+- **Capabilities:** an app declares `"capabilities": ["clock"]` for what it uses beyond state and data. `clock` is a live value, the epoch milliseconds ticking once a second, so `{{formatDate(clock, 'HH:mm')}}` stays current while only the bindings that read it re-run. `location` (`{lat, lon, accuracy}`, coarse) and `heading` (`{degrees, accuracy}`) are live values too: they start on first read, stream from the host, and stay null until the first fix. `slider` and `timePicker` are native controls with two-way `bind` and `onChange`. Async actions answer later through `then` with the result as `value` (or `else` with `error`); the shell asks the user the first time each app uses one that needs permission.
 - **Motion:**
   - `navigate` slides the new screen in from the right, and `back` slides it out; `"transition": "fade"` or `"none"` changes that per navigation. The iOS edge swipe and Android's predictive back gesture are interactive: the screen follows the finger over a snapshot of the previous one, and pops or springs back on release.
   - `style.transition` (milliseconds, or `{"duration", "easing"}` with `ease`, `linear`, `easeIn`, `easeOut` or `spring`) animates a node between values: its frame, opacity, colors and shape trim. A node that appears in an existing list fades in, and one that is removed fades out while its siblings move into its place.
@@ -119,6 +120,8 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 "data": { "apiKey": { "type": "string", "secret": true } }
 ```
 
+**Files.** Large data lives in files, not in rows: a data field of type `file` holds a handle `{id, name, type, size}` (or null), and a list's items may have `file` fields (e.g. books: `{title, file}`). Actions pick files, photos and camera shots into the app's store (`pickFile`, `pickPhoto`, `takePhoto`), read them as text or base64 (`readFile`), delete them (`deleteFile`) and share text, links or files (`share`); an `image`, `video` or `audio` whose `src` is a handle loads `jig-file:<app>/<id>` from that store. Each host keeps the store in the app's sandbox (Origin Private File System on the web), with a small index of the handles, and deleting the app clears its files with `files.clear`.
+
 ### Lists
 
 `list` renders items as native-looking rows: an inset card with hairline separators (or full-width rows with `"variant": "plain"`), an optional `header` and `footer`, and an `empty` state.
@@ -136,6 +139,10 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 - **Swipe actions.** Swiping a row left reveals its actions; a full swipe runs the first. Actions that remove default to the danger color.
 - **Reorder.** Long-press a row and drag it. The host reports each neighbour the row passes (`move` by -1 or 1), the runtime reorders the data and lays out again, and the other rows animate into place while the dragged one stays under the finger; near the edge of the screen, the list scrolls. Reordering writes the list back, so `items` must be a data path (`chores`), not a sorted view.
 - Each row has `as` (default `item`), `indexAs` (default `index`) and `$last` in scope.
+
+### Widgets
+
+An app's `widgets` section lists home-screen widgets: `{"today": {"title": "Chores today", "sizes": ["small", "medium"], "body": node, "open": "main"}}`. Widgets can't run the JS runtime, so the container renders each widget headlessly at its size (158×158, 338×158, 338×354) into a static tree of positioned text, shapes and images, in light and dark, with a 30-minute timeline for widgets that read the clock. The host draws the entry for the current time and opens the app at `open` on tap; `onTap` inside a widget is ignored. The web playground previews each size beside the phone.
 
 ### Node kinds
 
@@ -242,8 +249,13 @@ After profiling, if needed:
 - [x] Voice requests and model screenshots on all three hosts (tested live against the hosted API on the web; native needs a key entered in Settings)
 
 ### Container services
-- [ ] Scheduler and background jobs
-- [ ] Notifications and reminders
+- [x] Capabilities declared per app, asked for once and revocable in Settings; live values (`clock`, `location`, `heading`) and async actions with `then` / `else`
+- [x] Scheduler: a `schedule` section turned into OS notifications ahead of time, for closed apps too, including sun-based times
+- [x] Notifications, reminders and alarms (time-sensitive on iOS; exact alarms and full-screen intents on Android)
+- [x] Media: `audio` and `video` nodes, bundled sounds, haptics, keep-awake and brightness, speech
+- [x] Per-app file store, file / photo / camera pickers, sharing
+- [x] EPUB books: zip reading on each host, parsing and chapters in core, styled text with `spans`
+- [x] Home-screen widgets: rendered by the app from the spec, timelines for clock widgets (WidgetKit extension on iOS, an app widget on Android, a preview in the playground)
 - [ ] Shared personal data store with permissions between apps
 - [ ] Camera input with SAM 3.1
 - [ ] Icons with Muse Image
@@ -251,7 +263,9 @@ After profiling, if needed:
 ### Demo apps
 - [x] Water tracker
 - [x] Kid's chore chart
-- [x] Medication log for a parent
+- [x] Medication log for a parent, with a daily reminder while doses are left
+- [x] Showcase screens for the device (slider, time picker, location, sun times, compass), media and files
+- [x] EPUB reader: a library of books opened from files, each read chapter by chapter as styled text with links, the place in every book remembered
 - [ ] Workout log that feeds a meal planner (shared data store demo)
 - [ ] Pantry inventory from a shelf photo (SAM demo)
 

@@ -3,6 +3,7 @@ package dev.nitochkin.jig
 import android.animation.ObjectAnimator
 import android.animation.TimeInterpolator
 import android.animation.ValueAnimator
+import android.content.Context
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -12,6 +13,9 @@ import android.graphics.RectF
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
+import android.media.AudioAttributes
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -24,13 +28,18 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.view.animation.LinearInterpolator
 import android.view.animation.OvershootInterpolator
 import android.view.animation.PathInterpolator
 import android.view.inputmethod.EditorInfo
+import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageView
+import android.widget.MediaController
+import android.widget.SeekBar
 import android.widget.Switch
+import android.widget.VideoView
 import androidx.core.animation.doOnEnd
 import androidx.core.view.drawToBitmap
 import org.json.JSONArray
@@ -96,6 +105,20 @@ class AndroidRenderer(private val surface: JigLayout) {
     /** The frame the runtime last gave each node, in px; a view may still be animating to it. */
     private val targets = HashMap<Int, android.graphics.Rect>()
     private val reportingScroll = HashSet<Int>()
+    /** Sliders the user is dragging: JS updates wait for the release. */
+    private val sliderDragging = HashSet<Int>()
+    /** Video players by node (kept from `onPrepared`, for mute/loop/fit after load). */
+    private val videoPlayers = HashMap<Int, MediaPlayer>()
+    private val videoSources = HashMap<Int, String>()
+    private val videoFits = HashMap<Int, String>()
+    private val videoWithControls = HashSet<Int>()
+    private val videoTimeJobs = HashMap<Int, Runnable>()
+    /** Invisible audio nodes: one MediaPlayer each, with audio focus while playing. */
+    private val audioPlayers = HashMap<Int, MediaPlayer>()
+    private val audioSources = HashMap<Int, String>()
+    private val audioPrepared = HashSet<Int>()
+    private val audioTimeJobs = HashMap<Int, Runnable>()
+    private var audioFocusListener: AudioManager.OnAudioFocusChangeListener? = null
     /** Swipe actions and drag-to-reorder on list rows. */
     val rows = RowGestures(density, frameOf = { targets[it] }, dispatch = { id, name, payload -> dispatch?.invoke(id, name, payload) })
 
@@ -104,6 +127,26 @@ class AndroidRenderer(private val surface: JigLayout) {
         val s = Switch(context)
         s.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
         return s.measuredWidth / density.toDouble() to s.measuredHeight / density.toDouble()
+    }
+
+    /** A slider fills its width; only this height (in dp) is used. */
+    fun sliderSize(): Pair<Double, Double> {
+        val s = SeekBar(context)
+        s.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val h = s.measuredHeight.takeIf { it > 0 } ?: (28 * density).roundToInt()
+        return 160.0 to h / density.toDouble()
+    }
+
+    /** Intrinsic size (in dp) of the time picker's text button, at the default text size. */
+    fun timePickerSize(): Pair<Double, Double> {
+        val b = Button(context)
+        b.minimumHeight = 0
+        b.setTextSize(TypedValue.COMPLEX_UNIT_PX, 17 * density)
+        b.text = "00:00"
+        b.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val w = b.measuredWidth.takeIf { it > 0 } ?: (96 * density).roundToInt()
+        val h = b.measuredHeight.takeIf { it > 0 } ?: (36 * density).roundToInt()
+        return w / density.toDouble() to h / density.toDouble()
     }
 
     // ---------- Ops ----------
@@ -246,6 +289,17 @@ class AndroidRenderer(private val surface: JigLayout) {
             depths.remove(id)
             screenSnapshots.remove(id)
             reportingScroll.remove(id)
+            sliderDragging.remove(id)
+            (view as? JigVideoContainer)?.video?.let {
+                stopVideoTime(id)
+                runCatching { it.stopPlayback() }
+                videoPlayers.remove(id)
+                videoSources.remove(id)
+                videoFits.remove(id)
+                videoWithControls.remove(id)
+            }
+            if (audioPlayers.containsKey(id)) releaseAudio(id)
+            audioSources.remove(id)
             rows.forget(id)
             selections.remove(id)
         }
@@ -564,8 +618,69 @@ class AndroidRenderer(private val surface: JigLayout) {
                 dispatch?.invoke(id, "change", JSONObject().put("value", checked))
             }
         }
+        "slider" -> SeekBar(context).apply {
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(s: SeekBar?, progress: Int, fromUser: Boolean) {
+                    // Keyboard, D-pad and accessibility changes come here without a
+                    // touch drag; report them at once instead of waiting for a release.
+                    if (!fromUser || id in sliderDragging) return
+                    val node = nodes[id] ?: return
+                    dispatch?.invoke(id, "change", JSONObject().put("value", sliderValue(node, progress)))
+                }
+                override fun onStartTrackingTouch(s: SeekBar?) { sliderDragging.add(id) }
+                override fun onStopTrackingTouch(s: SeekBar?) {
+                    sliderDragging.remove(id)
+                    val node = nodes[id] ?: return
+                    // The drag ended (a tap that moves the thumb ends here too); the thumb moves itself.
+                    dispatch?.invoke(id, "change", JSONObject().put("value", sliderValue(node, s?.progress ?: 0)))
+                }
+            })
+        }
+        "timePicker" -> Button(context).apply {
+            // A text button: the renderer's transparent background leaves just the time.
+            minimumHeight = 0
+            setOnClickListener {
+                val node = nodes[id] ?: return@setOnClickListener
+                val (hour, minute) = parseHHMM(str(node.props["value"])) ?: (12 to 0)
+                android.app.TimePickerDialog(context, { _, h, m ->
+                    val picked = "%02d:%02d".format(java.util.Locale.ROOT, h, m)
+                    // Show the pick at once and keep it as the dialog's selection:
+                    // JS may never send the value back.
+                    node.props["value"] = picked
+                    (nodes[id]?.view as? Button)?.text = formatTime(picked)
+                    dispatch?.invoke(id, "change", JSONObject().put("value", picked))
+                }, hour, minute, android.text.format.DateFormat.is24HourFormat(context)).show()
+            }
+        }
         "shape" -> JigShapeView(context)
         "image" -> ImageView(context).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        "video" -> JigVideoContainer(context).apply {
+          video.tag = id
+          video.apply {
+            setOnPreparedListener { mp ->
+                videoPlayers[id] = mp
+                val node = nodes[id]
+                mp.isLooping = node?.props?.get("loop") == true
+                applyVideoMute(id, mp)
+                applyVideoFit(id)
+                // A new source starts only if JS still wants it playing.
+                if (node?.props?.get("playing") == true) {
+                    start()
+                    startVideoTime(id)
+                } else pause()
+                startVideoTime(id)
+            }
+            setOnCompletionListener {
+                // With looping the player restarts itself; otherwise report the end.
+                if (nodes[id]?.props?.get("loop") != true) {
+                    dispatch?.invoke(id, "ended", JSONObject())
+                }
+            }
+            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> applyVideoFit(id) }
+          }
+        }
+        // No visible UI (0×0): the view only owns the player.
+        "audio" -> View(context)
         "scroll" -> JigScrollView(context)
         "hscroll" -> JigHScrollView(context)
         "canvas" -> JigCanvasView(context)
@@ -659,7 +774,19 @@ class AndroidRenderer(private val surface: JigLayout) {
         when (node.type) {
             "text", "button" -> {
                 val t = view as JigTextView
-                t.setText(str(p[if (node.type == "button") "label" else "value"]), crossfade = tr?.duration ?: 0)
+                if (node.type == "text") {
+                    // Spans win over the value; a tap on a link sends `link` instead of `tap`.
+                    val spans = (p["spans"] as? JSONArray)?.takeIf { it.length() > 0 }?.let { nodeSpans(it) }
+                    if (spans != null) {
+                        t.setSpans(spans.first, spans.second, crossfade = tr?.duration ?: 0)
+                        t.onLink = { url -> dispatch?.invoke(view.tag as Int, "link", JSONObject().put("url", url)) }
+                    } else {
+                        t.setText(str(p["value"]), crossfade = tr?.duration ?: 0)
+                        t.onLink = null
+                    }
+                } else {
+                    t.setText(str(p["label"]), crossfade = tr?.duration ?: 0)
+                }
                 t.setStyle(
                     fontSize = num(s["fontSize"]) ?: 17.0,
                     fontWeight = (num(s["fontWeight"]) ?: 400.0).toInt(),
@@ -716,6 +843,25 @@ class AndroidRenderer(private val surface: JigLayout) {
                     node.updating = false
                 }
             }
+            "slider" -> {
+                val seek = view as SeekBar
+                val tint = color(p["tint"]) ?: accentColor
+                seek.progressTintList = ColorStateList.valueOf(tint)
+                seek.thumbTintList = ColorStateList.valueOf(tint)
+                val divisions = sliderDivisions(node)
+                if (seek.max != divisions) seek.max = divisions
+                // A JS update waits while the user drags; the release reports the final value.
+                if (view.tag as Int !in sliderDragging) {
+                    val target = sliderTarget(node, divisions)
+                    if (seek.progress != target) seek.progress = target
+                }
+            }
+            "timePicker" -> {
+                val button = view as Button
+                button.text = formatTime(str(p["value"]))
+                button.setTextSize(TypedValue.COMPLEX_UNIT_PX, ((num(s["fontSize"]) ?: 17.0) * density).toFloat())
+                button.setTextColor(color(p["tint"]) ?: color(s["color"]) ?: Color.BLACK)
+            }
             "shape" -> {
                 val shape = view as JigShapeView
                 shape.pathData = str(p["path"])
@@ -731,6 +877,8 @@ class AndroidRenderer(private val surface: JigLayout) {
                 }
             }
             "image" -> loadImage(str(p["src"]), view as ImageView, view.tag as Int)
+            "video" -> renderVideo(node, (view as JigVideoContainer).video)
+            "audio" -> renderAudio(node)
             "scroll", "hscroll", "canvas" -> {
                 if (view is JigHScrollView) {
                     // A paging hscroll (the builder's screen pager) reports the page it settles on.
@@ -789,6 +937,7 @@ class AndroidRenderer(private val surface: JigLayout) {
         io.execute {
             val bytes = runCatching {
                 when {
+                    src.startsWith("jig-file:") -> fileBytes(src)
                     src.startsWith("data:") -> Base64.decode(src.substringAfter(','), Base64.DEFAULT)
                     src.startsWith("https://") || src.startsWith("http://") -> URL(src).openStream().use { it.readBytes() }
                     else -> null
@@ -804,7 +953,284 @@ class AndroidRenderer(private val surface: JigLayout) {
         }
     }
 
+    /** The bytes of a `jig-file:<app>/<id>` source, from the app's file store. */
+    private fun fileBytes(src: String): ByteArray? {
+        val rest = src.removePrefix("jig-file:")
+        val slash = rest.indexOf('/')
+        if (slash < 0) return null
+        return FileStore.read(context, rest.substring(0, slash), rest.substring(slash + 1))
+    }
+
+    // ---------- Media (video and audio nodes) ----------
+
+    /** Applies a video node's props: source, transport, mute, controls and fit. */
+    private fun renderVideo(node: Node, video: VideoView) {
+        val id = video.tag as Int
+        val p = node.props
+        val src = str(p["src"])
+        if (videoSources[id] != src) {
+            videoSources[id] = src
+            videoPlayers.remove(id)
+            stopVideoTime(id)
+            if (src.startsWith("jig-file:")) {
+                val rest = src.removePrefix("jig-file:")
+                val slash = rest.indexOf('/')
+                val file = if (slash < 0) null else FileStore.file(context, rest.substring(0, slash), rest.substring(slash + 1))
+                if (file != null) video.setVideoPath(file.absolutePath) else video.stopPlayback()
+            } else if (src.startsWith("https://") || src.startsWith("http://")) {
+                video.setVideoURI(android.net.Uri.parse(src))
+            } else {
+                video.stopPlayback()
+            }
+        }
+        videoPlayers[id]?.isLooping = p["loop"] == true
+        videoPlayers[id]?.let { applyVideoMute(id, it) }
+        // The platform's own play/pause/scrub controls.
+        if (p["controls"] == true) {
+            if (videoWithControls.add(id)) {
+                video.setMediaController(MediaController(context).apply { setAnchorView(video) })
+            }
+        } else if (videoWithControls.remove(id)) {
+            video.setMediaController(null)
+        }
+        videoFits[id] = if (p["fit"] == "cover") "cover" else "contain"
+        applyVideoFit(id)
+        // `start` before preparation starts on prepared (and `onPrepared` starts too);
+        // either way the time reports run while it plays.
+        if (p["playing"] == true) {
+            video.start()
+            startVideoTime(id)
+        } else {
+            video.pause()
+        }
+        startVideoTime(id)
+    }
+
+    private fun applyVideoMute(id: Int, mp: MediaPlayer) {
+        val muted = nodes[id]?.props?.get("muted") == true
+        mp.setVolume(if (muted) 0f else 1f, if (muted) 0f else 1f)
+    }
+
+    /** `cover` scales the letterboxed video up to fill the frame; `contain` is the default. */
+    private fun applyVideoFit(id: Int) {
+        val v = nodes[id]?.view as? JigVideoContainer ?: return
+        val mp = videoPlayers[id] ?: return
+        v.setFit(videoFits[id] == "cover", mp.videoWidth, mp.videoHeight)
+    }
+
+    /** Reports `time` {position, duration} (seconds) about once a second while playing. */
+    private fun startVideoTime(id: Int) {
+        if (videoTimeJobs.containsKey(id)) return
+        val job = object : Runnable {
+            override fun run() {
+                val v = (nodes[id]?.view as? JigVideoContainer)?.video
+                if (v == null) {
+                    videoTimeJobs.remove(id)
+                    return
+                }
+                val duration = v.duration.takeIf { it > 0 } ?: 0
+                if (v.isPlaying) dispatch?.invoke(id, "time", JSONObject().put("position", v.currentPosition / 1000.0).put("duration", duration / 1000.0))
+                main.postDelayed(this, 1000)
+            }
+        }
+        videoTimeJobs[id] = job
+        main.postDelayed(job, 1000)
+    }
+
+    private fun stopVideoTime(id: Int) {
+        videoTimeJobs.remove(id)?.let(main::removeCallbacks)
+    }
+
+    /** Applies an audio node's props, creating its player on the first source. */
+    private fun renderAudio(node: Node) {
+        val id = node.view.tag as Int
+        val p = node.props
+        val src = str(p["src"])
+        if (audioSources[id] != src) {
+            releaseAudio(id)
+            audioSources[id] = src
+            val mp = MediaPlayer()
+            try {
+                if (src.startsWith("@")) {
+                    // A bundled sound, copied into the assets (see copy-native.mjs).
+                    val afd = context.assets.openFd("runtime/sounds/${src.substring(1)}.wav")
+                    mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                    afd.close()
+                } else if (src.startsWith("jig-file:")) {
+                    // A file from the app's store, played from its sandbox path.
+                    val rest = src.removePrefix("jig-file:")
+                    val slash = rest.indexOf('/')
+                    val file = if (slash < 0) null else FileStore.file(context, rest.substring(0, slash), rest.substring(slash + 1))
+                    if (file != null) mp.setDataSource(file.absolutePath) else return
+                } else if (src.startsWith("https://") || src.startsWith("http://")) {
+                    mp.setDataSource(src)
+                } else {
+                    return
+                }
+                mp.setAudioAttributes(AudioAttributes.Builder().setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                audioPlayers[id] = mp
+                mp.setOnPreparedListener {
+                    audioPrepared.add(id)
+                    val current = nodes[id] ?: return@setOnPreparedListener
+                    val vol = (num(current.props["volume"]) ?: 1.0).toFloat().coerceIn(0f, 1f)
+                    it.setVolume(vol, vol)
+                    it.isLooping = current.props["loop"] == true
+                    if (current.props["playing"] == true) {
+                        requestAudioFocus()
+                        it.start()
+                        startAudioTime(id)
+                    }
+                }
+                mp.setOnCompletionListener {
+                    // With looping the player restarts itself; otherwise report the end.
+                    if (nodes[id]?.props?.get("loop") != true) {
+                        stopAudioTime(id)
+                        abandonAudioFocusIfIdle()
+                        dispatch?.invoke(id, "ended", JSONObject())
+                    }
+                }
+                mp.prepareAsync()
+            } catch (_: Exception) {
+                releaseAudio(id)
+                return
+            }
+        }
+        val mp = audioPlayers[id] ?: return
+        val vol = (num(p["volume"]) ?: 1.0).toFloat().coerceIn(0f, 1f)
+        runCatching { mp.setVolume(vol, vol) }
+        runCatching { mp.isLooping = p["loop"] == true }
+        if (p["playing"] == true) {
+            // `start` before preparation starts on prepared (see above).
+            requestAudioFocus()
+            if (audioPrepared.contains(id)) runCatching { if (!mp.isPlaying) mp.start() }
+            startAudioTime(id)
+        } else {
+            if (audioPrepared.contains(id)) runCatching { if (mp.isPlaying) mp.pause() }
+            stopAudioTime(id)
+            abandonAudioFocusIfIdle()
+        }
+    }
+
+    private fun startAudioTime(id: Int) {
+        if (audioTimeJobs.containsKey(id)) return
+        val job = object : Runnable {
+            override fun run() {
+                val mp = audioPlayers[id]
+                if (mp == null || !audioPrepared.contains(id) || !mp.isPlaying) {
+                    audioTimeJobs.remove(id)
+                    return
+                }
+                val duration = runCatching { mp.duration }.getOrDefault(0).takeIf { it > 0 } ?: 0
+                val position = runCatching { mp.currentPosition }.getOrDefault(0)
+                dispatch?.invoke(id, "time", JSONObject().put("position", position / 1000.0).put("duration", duration / 1000.0))
+                main.postDelayed(this, 1000)
+            }
+        }
+        audioTimeJobs[id] = job
+        main.postDelayed(job, 1000)
+    }
+
+    private fun stopAudioTime(id: Int) {
+        audioTimeJobs.remove(id)?.let(main::removeCallbacks)
+    }
+
+    private fun releaseAudio(id: Int) {
+        stopAudioTime(id)
+        audioPlayers.remove(id)?.let { runCatching { it.reset() }; runCatching { it.release() } }
+        audioPrepared.remove(id)
+        abandonAudioFocusIfIdle()
+    }
+
+    private fun requestAudioFocus() {
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        if (audioFocusListener == null) {
+            audioFocusListener = AudioManager.OnAudioFocusChangeListener { change ->
+                if (change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT) {
+                    // Another app took the sound: pause everything until JS resumes it.
+                    for ((aid, mp) in audioPlayers) {
+                        if (audioPrepared.contains(aid)) runCatching { if (mp.isPlaying) mp.pause() }
+                        stopAudioTime(aid)
+                    }
+                }
+            }
+        }
+        am.requestAudioFocus(audioFocusListener, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN)
+    }
+
+    private fun abandonAudioFocusIfIdle() {
+        if (audioPlayers.any { (aid, mp) -> audioPrepared.contains(aid) && runCatching { mp.isPlaying }.getOrDefault(false) }) return
+        val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        audioFocusListener?.let { am.abandonAudioFocus(it) }
+    }
+
     // ---------- Values ----------
+
+    /** A slider's [min, max] and optional snap step. */
+    private fun sliderBounds(node: Node): Triple<Double, Double, Double?> {
+        val min = num(node.props["min"]) ?: 0.0
+        var max = num(node.props["max"]) ?: 1.0
+        if (max <= min) max = min + 1.0
+        return Triple(min, max, num(node.props["step"])?.takeIf { it > 0 })
+    }
+
+    /** SeekBar divisions: one per step when the value snaps, else a thousand. */
+    private fun sliderDivisions(node: Node): Int {
+        val (min, max, step) = sliderBounds(node)
+        return if (step != null) maxOf(1, kotlin.math.ceil((max - min) / step).toInt()) else 1000
+    }
+
+    /** Snaps a value into [min, max] and onto the step, as `change` reports it. */
+    private fun snapSlider(value: Double, min: Double, max: Double, step: Double?): Double {
+        val clamped = value.coerceIn(min, max)
+        if (step == null) return clamped
+        return (min + ((clamped - min) / step).roundToInt() * step).coerceIn(min, max)
+    }
+
+    /** The SeekBar position for the node's value: the nearest division. */
+    private fun sliderTarget(node: Node, divisions: Int): Int {
+        val (min, max, step) = sliderBounds(node)
+        val value = (num(node.props["value"]) ?: min).coerceIn(min, max)
+        if (step == null) {
+            if (max <= min) return 0
+            return ((value - min) / (max - min) * divisions).roundToInt().coerceIn(0, divisions)
+        }
+        if (divisions <= 0) return 0
+        // Divisions hold min + i*step (the last clamped to max); the last interval can be
+        // short, so anything past its midpoint belongs to it.
+        val prev = min + (divisions - 1) * step
+        if (value > (prev + max) / 2) return divisions
+        return ((value - min) / step).roundToInt().coerceIn(0, maxOf(0, divisions - 1))
+    }
+
+    /** The value a SeekBar position reports: min + i*step (the last clamped to max). */
+    private fun sliderValue(node: Node, progress: Int): Double {
+        val (min, max, step) = sliderBounds(node)
+        if (step == null) {
+            val divisions = sliderDivisions(node)
+            return snapSlider(min + progress.toDouble() / divisions * (max - min), min, max, step)
+        }
+        return (min + progress * step).coerceIn(min, max)
+    }
+
+    /** Parses the picker's "HH:MM" (24-hour) value. */
+    private fun parseHHMM(value: String): Pair<Int, Int>? {
+        val parts = value.split(":")
+        if (parts.size != 2) return null
+        val hour = parts[0].toIntOrNull() ?: return null
+        val minute = parts[1].toIntOrNull() ?: return null
+        if (hour !in 0..23 || minute !in 0..59) return null
+        return hour to minute
+    }
+
+    /** Shows the value in the user's 12/24-hour format; an invalid value shows as-is. */
+    private fun formatTime(value: String): String {
+        val (hour, minute) = parseHHMM(value) ?: return value
+        val at = java.util.Calendar.getInstance().apply {
+            set(java.util.Calendar.HOUR_OF_DAY, hour)
+            set(java.util.Calendar.MINUTE, minute)
+        }
+        return android.text.format.DateFormat.getTimeFormat(context).format(at.time)
+    }
 
     private fun viewBox(v: Any?): RectF {
         val parts = str(v).split(' ', ',').mapNotNull { it.toFloatOrNull() }
@@ -813,6 +1239,21 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     private fun str(v: Any?) = if (v == null || v == JSONObject.NULL) "" else v.toString()
     private fun num(v: Any?): Double? = (v as? Number)?.toDouble() ?: (v as? String)?.toDoubleOrNull()
+
+    /** A `text` node's spans prop as concatenated text plus UTF-16 runs, or null. */
+    private fun nodeSpans(spans: JSONArray): Pair<String, List<NodeSpan>>? {
+        val text = StringBuilder()
+        val runs = ArrayList<NodeSpan>()
+        for (i in 0 until spans.length()) {
+            val o = spans.optJSONObject(i) ?: continue
+            val part = str(o.opt("text"))
+            if (part.isEmpty()) continue
+            val start = text.length
+            text.append(part)
+            runs.add(NodeSpan(start, text.length, o.optBoolean("bold"), o.optBoolean("italic"), color(o.opt("color")), o.optString("link").ifEmpty { null }))
+        }
+        return if (text.isEmpty()) null else text.toString() to runs
+    }
 
     companion object {
         /** Parses the runtime's colors: `#rgb`, `#rrggbb`, `#rrggbbaa` (CSS order), `none`, `transparent`. */
@@ -833,5 +1274,34 @@ class AndroidRenderer(private val surface: JigLayout) {
             val a = (rgba and 0xff).toInt()
             return (a shl 24) or (rgba shr 8).toInt()
         }
+    }
+}
+
+
+/** Keeps cover video inside its assigned frame, independently of the surface size. */
+private class JigVideoContainer(context: Context) : android.widget.FrameLayout(context) {
+    val video = object : VideoView(context) {
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(MeasureSpec.getSize(widthMeasureSpec), MeasureSpec.getSize(heightMeasureSpec))
+        }
+    }
+    private var cover = false
+    private var naturalWidth = 0
+    private var naturalHeight = 0
+    init { clipChildren = true; clipToPadding = true; addView(video) }
+    fun setFit(value: Boolean, w: Int, h: Int) {
+        if (cover == value && naturalWidth == w && naturalHeight == h) return
+        cover = value; naturalWidth = w; naturalHeight = h; requestLayout()
+    }
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val w = right - left; val h = bottom - top
+        val scale = if (naturalWidth > 0 && naturalHeight > 0) {
+            val sx = w.toFloat() / naturalWidth; val sy = h.toFloat() / naturalHeight
+            if (cover) maxOf(sx, sy) else minOf(sx, sy)
+        } else 0f
+        val vw = if (scale > 0) (naturalWidth * scale).roundToInt() else w
+        val vh = if (scale > 0) (naturalHeight * scale).roundToInt() else h
+        video.measure(MeasureSpec.makeMeasureSpec(vw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(vh, MeasureSpec.EXACTLY))
+        video.layout((w - vw) / 2, (h - vh) / 2, (w + vw) / 2, (h + vh) / 2)
     }
 }

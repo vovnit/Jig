@@ -1,5 +1,12 @@
 # Plan: native capabilities
 
+**Status: built.** Phases A–G are implemented on the web, iOS and Android. Where the build differs from this plan:
+- The file store landed in Phase E, with the pickers, the first things that make files.
+- There is no `richtext` node: `text` takes `spans` (bold, italic, color, links), and a reader shows a chapter as a virtualized `list` of paragraphs.
+- `audio` has no on-screen controls: apps build play and pause from buttons bound to `playing`.
+- iOS alarms are time-sensitive notifications with a sound; AlarmKit is left for later.
+- Widgets are drawn by the app into images (PNG) that the widget shows, on both platforms; interactive widgets are still to come.
+
 Apps can show data and change it, but they can't play a sound, open a file, know the time as it passes, or show up outside the app. This plan adds those as capabilities of the container: declared in the spec, implemented natively on each host, permissioned per app. An app still can't run code.
 
 ## What the apps people ask for need

@@ -1,4 +1,27 @@
+import AVFoundation
 import UIKit
+
+/// A video node: an AVPlayerLayer filling the frame (`contain` or `cover`).
+final class JigVideoView: UIView {
+    var player: AVPlayer? {
+        get { (layer as? AVPlayerLayer)?.player }
+        set { (layer as? AVPlayerLayer)?.player = newValue }
+    }
+    var gravity = AVLayerVideoGravity.resizeAspect {
+        didSet { (layer as? AVPlayerLayer)?.videoGravity = gravity }
+    }
+
+    override static var layerClass: AnyClass { AVPlayerLayer.self }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .black
+        clipsToBounds = true
+        (layer as? AVPlayerLayer)?.videoGravity = .resizeAspect
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+}
 
 /// Text drawn with the same NSStringDrawing call the runtime measures with
 /// (`TextStyle.measure`), so wrapping always matches the measured height.
@@ -11,6 +34,8 @@ final class JigTextView: UIView {
         }
     }
     var insets: UIEdgeInsets = .zero { didSet { setNeedsDisplay() } }
+    /// A tap on a link sends `link` with its URL instead of `tap`; the runtime decides.
+    var onLink: ((String) -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -18,9 +43,41 @@ final class JigTextView: UIView {
         contentMode = .redraw
         isAccessibilityElement = true
         accessibilityTraits = .staticText
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(handleLinkTap(_:))))
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    // Only a tap on a link is the label's: any other tap goes to the row or button around it.
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture.view === self, gesture is UITapGestureRecognizer else { return super.gestureRecognizerShouldBegin(gesture) }
+        return onLink != nil && url(at: gesture.location(in: self)) != nil
+    }
+
+    @objc private func handleLinkTap(_ gesture: UITapGestureRecognizer) {
+        if let url = url(at: gesture.location(in: self)) { onLink?(url) }
+    }
+
+    /// The linked URL at a point in the view, if the tap hit a link's characters.
+    func url(at point: CGPoint) -> String? {
+        let box = bounds.inset(by: insets)
+        guard box.contains(point), text.length > 0 else { return nil }
+        let storage = NSTextStorage(attributedString: text)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: box.size)
+        container.lineFragmentPadding = 0
+        container.lineBreakMode = .byWordWrapping
+        container.maximumNumberOfLines = 0
+        layout.addTextContainer(container)
+        let loc = CGPoint(x: point.x - box.minX, y: point.y - box.minY)
+        let idx = layout.characterIndex(for: loc, in: container, fractionOfDistanceBetweenInsertionPoints: nil)
+        guard idx < text.length else { return nil }
+        // The index snaps to the nearest glyph; confirm the tap is on its line's text.
+        var range = NSRange()
+        guard layout.lineFragmentUsedRect(forGlyphAt: layout.glyphIndexForCharacter(at: idx), effectiveRange: &range).contains(loc) else { return nil }
+        return text.attribute(.link, at: idx, effectiveRange: nil) as? String
+    }
 
     override func draw(_ rect: CGRect) {
         text.draw(with: bounds.inset(by: insets), options: [.usesLineFragmentOrigin, .usesFontLeading], context: nil)

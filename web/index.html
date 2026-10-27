@@ -22,6 +22,7 @@
           <button data-tab="ops">Ops</button>
           <button data-tab="stats">Frame</button>
           <button data-tab="data">Data</button>
+          <button data-tab="widgets">Widgets</button>
         </div>
         <div class="tab" data-tab="spec">
           <textarea id="spec" spellcheck="false"></textarea>
@@ -30,6 +31,10 @@
         <pre class="tab hidden" data-tab="ops" id="ops"></pre>
         <pre class="tab hidden" data-tab="stats" id="stats"></pre>
         <pre class="tab hidden" data-tab="data" id="data"></pre>
+        <div class="tab hidden" data-tab="widgets" id="widgets-tab">
+          <div id="widget-controls"></div>
+          <div id="widgets"></div>
+        </div>
       </section>
     </div>
     <script type="module" src="/src/main.ts"></script>

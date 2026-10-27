@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Stored files, shared read-only with other apps. -->
+    <files-path name="appfiles" path="files/" />
+    <!-- Shared copies, named with the file's original name. -->
+    <cache-path name="shared" path="shared/" />
+    <!-- Photos the camera app writes for `takePhoto`. -->
+    <cache-path name="capture" path="capture/" />
+</paths>

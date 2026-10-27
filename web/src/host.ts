@@ -2,6 +2,7 @@
 // absolutely positioned element; the JS layout engine owns all geometry.
 
 import { type Database, type Host, type Op, type Props, type Runtime, type Size, type TextMeasureStyle } from "@jig/core";
+import { fileUrl } from "./files.ts";
 import { RowGestures } from "./rows.ts";
 import { callService } from "./services.ts";
 
@@ -67,6 +68,10 @@ export class DomHost implements Host {
     requestAnimationFrame(cb);
   }
 
+  after(ms: number, cb: () => void): void {
+    setTimeout(cb, ms);
+  }
+
   now(): number {
     return performance.now();
   }
@@ -82,10 +87,53 @@ export class DomHost implements Host {
     p.style.fontWeight = String(style.fontWeight);
     p.style.lineHeight = `${style.lineHeight}px`;
     p.style.maxWidth = `${maxWidth}px`;
-    p.textContent = text;
+    p.textContent = "";
+    if (style.spans?.length) {
+      // The same attributed string the node draws: segments split at run
+      // boundaries, each with its own weight and slant (colors don't measure).
+      const bounds = new Set<number>([0, text.length]);
+      for (const r of style.spans) {
+        bounds.add(clampOffset(r.start, text.length));
+        bounds.add(clampOffset(r.end, text.length));
+      }
+      const pts = [...bounds].sort((a, b) => a - b);
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const [a, b] = [pts[i], pts[i + 1]];
+        if (b <= a) continue;
+        const seg = text.slice(a, b);
+        const bold = style.spans.some((r) => r.bold && r.start <= a && a < r.end);
+        const italic = style.spans.some((r) => r.italic && r.start <= a && a < r.end);
+        if (!bold && !italic) {
+          p.appendChild(document.createTextNode(seg));
+          continue;
+        }
+        const s = document.createElement("span");
+        s.textContent = seg;
+        if (bold) s.style.fontWeight = "700";
+        if (italic) s.style.fontStyle = "italic";
+        p.appendChild(s);
+      }
+    } else {
+      p.textContent = text;
+    }
     const r = p.getBoundingClientRect();
     return { width: r.width, height: r.height };
   }
+
+  /**
+   * Intrinsic sizes of native controls. The toggle keeps the core's 51×31
+   * default; slider and time picker heights come from real elements.
+   */
+  measureControl(type: string): Size {
+    if (type === "toggle") return { width: 51, height: 31 };
+    const hit = this.controlSizes.get(type);
+    if (hit) return hit;
+    const size = probeControl(type);
+    this.controlSizes.set(type, size);
+    return size;
+  }
+
+  private readonly controlSizes = new Map<string, Size>();
 
   apply(ops: Op[]): void {
     // A screen transition: keep a picture of the old screen to animate away from.
@@ -287,6 +335,13 @@ export class DomHost implements Host {
   private forget(el: HTMLElement): void {
     for (const e of [el, ...el.querySelectorAll<HTMLElement>("[data-id]")]) {
       const id = Number(e.dataset.id);
+      const type = this.types.get(id);
+      // A removed player stops: an audio node must not keep playing off screen.
+      if ((type === "video" || type === "audio") && e instanceof HTMLMediaElement) {
+        e.pause();
+        e.removeAttribute("src");
+        e.load();
+      }
       this.els.delete(id);
       this.types.delete(id);
       this.transitions.delete(id);
@@ -337,6 +392,31 @@ export class DomHost implements Host {
         });
         break;
       }
+      case "slider": {
+        const input = document.createElement("input");
+        input.type = "range";
+        input.addEventListener("pointerdown", () => { input.dataset.dragging = "1"; });
+        const release = () => { delete input.dataset.dragging; };
+        input.addEventListener("pointerup", release);
+        input.addEventListener("pointercancel", release);
+        // `change` fires when the drag ends (and on a tap or key that moves the thumb).
+        input.addEventListener("change", () => {
+          release();
+          this.runtime.dispatch(id, "change", { value: snapRange(input) });
+        });
+        el = input;
+        break;
+      }
+      case "timePicker": {
+        const input = document.createElement("input");
+        input.type = "time";
+        input.addEventListener("change", () => {
+          // Clearing the input leaves an empty value: not a time, so stay quiet.
+          if (input.value !== "") this.runtime.dispatch(id, "change", { value: input.value });
+        });
+        el = input;
+        break;
+      }
       case "shape": {
         el = document.createElementNS("http://www.w3.org/2000/svg", "svg") as unknown as HTMLElement;
         el.appendChild(document.createElementNS("http://www.w3.org/2000/svg", "path"));
@@ -346,6 +426,42 @@ export class DomHost implements Host {
         const img = document.createElement("img");
         img.addEventListener("load", () => this.runtime.dispatch(id, "load", { width: img.naturalWidth, height: img.naturalHeight }));
         el = img;
+        break;
+      }
+      case "video": {
+        const video = document.createElement("video");
+        video.playsInline = true;
+        video.preload = "metadata";
+        video.addEventListener("ended", () => this.runtime.dispatch(id, "ended"));
+        // `timeupdate` fires a few times a second; report about once a second.
+        let last = 0;
+        video.addEventListener("timeupdate", () => {
+          const now = Date.now();
+          if (now - last < 800) return;
+          last = now;
+          this.runtime.dispatch(id, "time", {
+            position: video.currentTime,
+            duration: Number.isFinite(video.duration) ? video.duration : 0,
+          });
+        });
+        el = video;
+        break;
+      }
+      case "audio": {
+        const audio = document.createElement("audio");
+        audio.preload = "auto";
+        audio.addEventListener("ended", () => this.runtime.dispatch(id, "ended"));
+        let last = 0;
+        audio.addEventListener("timeupdate", () => {
+          const now = Date.now();
+          if (now - last < 800) return;
+          last = now;
+          this.runtime.dispatch(id, "time", {
+            position: audio.currentTime,
+            duration: Number.isFinite(audio.duration) ? audio.duration : 0,
+          });
+        });
+        el = audio;
         break;
       }
       case "scroll":
@@ -374,17 +490,51 @@ export class DomHost implements Host {
     const el = this.els.get(id);
     const type = this.types.get(id);
     if (!el || !type) return;
+    if (type === "slider") {
+      // Bounds first: `value` snaps against the new ones whatever order the props arrive in.
+      // Always set all three (defaults 0, 1, "any") before the value: a slider created
+      // with only a value must not keep the element's 0..100 defaults.
+      const input = el as HTMLInputElement;
+      if (props.min != null) input.min = String(props.min);
+      else if ("min" in props || input.min === "") input.min = "0";
+      if (props.max != null) input.max = String(props.max);
+      else if ("max" in props || input.max === "") input.max = "1";
+      if (props.step != null) input.step = String(props.step);
+      else if ("step" in props || input.getAttribute("step") == null) input.step = "any";
+    }
     for (const [k, v] of Object.entries(props)) {
       switch (k) {
         case "style":
           this.applyStyle(el, type, v as Style);
           break;
         case "value":
-          if (type === "text") el.textContent = String(v ?? "");
-          else if (type === "textfield") {
+          if (type === "text") {
+            // Spans win over the value; the spans case below renders them.
+            if ("spans" in props) break;
+            el.dataset.value = String(v ?? "");
+            if (!el.dataset.spans) this.renderText(id, el);
+          } else if (type === "textfield") {
             const input = el as HTMLInputElement;
             if (input.value !== v) input.value = String(v ?? "");
           } else if (type === "toggle") el.setAttribute("aria-checked", String(Boolean(v)));
+          else if (type === "slider") {
+            const input = el as HTMLInputElement;
+            // A JS update waits while the user drags; the release reports the final value.
+            if (input.dataset.dragging !== "1") {
+              input.value = String(v ?? "");
+              input.value = String(snapRange(input));
+            }
+          } else if (type === "timePicker") {
+            const input = el as HTMLInputElement;
+            if (input.value !== String(v ?? "")) input.value = String(v ?? "");
+          }
+          break;
+        case "spans":
+          if (type === "text") {
+            // Kept on the element: a later `value` without spans still renders these.
+            el.dataset.spans = Array.isArray(v) && v.length ? JSON.stringify(v) : "";
+            this.renderText(id, el);
+          }
           break;
         case "label":
           if (type === "button") el.textContent = String(v ?? "");
@@ -400,8 +550,34 @@ export class DomHost implements Host {
           (el as HTMLInputElement).type = v ? "password" : "text";
           (el as HTMLInputElement).autocomplete = v ? "current-password" : "off";
           break;
+        case "tint":
+          // The theme accent (CSS) shows unless a tint overrides it.
+          if (type === "slider" || type === "timePicker") el.style.accentColor = v ? String(v) : "";
+          break;
         case "src":
-          (el as HTMLImageElement).src = String(v ?? "");
+          if (type === "video" || type === "audio") setMediaSrc(el as HTMLMediaElement, v);
+          else setImageSrc(el as HTMLImageElement, v);
+          break;
+        case "playing":
+          if (type === "video" || type === "audio") setMediaPlaying(el as HTMLMediaElement, v === true);
+          break;
+        case "loop":
+          if (type === "video" || type === "audio") (el as HTMLMediaElement).loop = v === true;
+          break;
+        case "muted":
+          if (type === "video") (el as HTMLMediaElement).muted = v === true;
+          break;
+        case "volume":
+          if (type === "audio") {
+            const n = Number(v);
+            (el as HTMLMediaElement).volume = Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 1;
+          }
+          break;
+        case "controls":
+          if (type === "video") (el as HTMLMediaElement).controls = v === true;
+          break;
+        case "fit":
+          if (type === "video") el.style.objectFit = v === "cover" ? "cover" : "contain";
           break;
         case "contentSize": {
           const [w, h] = v as [number, number];
@@ -490,6 +666,39 @@ export class DomHost implements Host {
 
   private readonly trims = new Map<number, [number, number]>();
 
+  /**
+   * A `text` node: its spans when it has any (a list of {text, bold, italic,
+   * color, link}, the color already resolved by the runtime), else its value.
+   * A tap on a link sends `link` {url} instead of `tap`; the runtime decides.
+   */
+  private renderText(id: number, el: HTMLElement): void {
+    const runs = parseSpans(el.dataset.spans);
+    el.textContent = "";
+    if (!runs) {
+      el.textContent = el.dataset.value ?? "";
+      return;
+    }
+    for (const run of runs) {
+      const s = run.link ? document.createElement("a") : document.createElement("span");
+      s.textContent = run.text;
+      if (run.bold) s.style.fontWeight = "700";
+      if (run.italic) s.style.fontStyle = "italic";
+      if (run.color) s.style.color = run.color;
+      if (run.link) {
+        (s as HTMLAnchorElement).href = run.link;
+        s.style.textDecoration = "underline";
+        s.style.cursor = "pointer";
+        const url = run.link;
+        s.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          this.runtime.dispatch(id, "link", { url });
+        });
+      }
+      el.appendChild(s);
+    }
+  }
+
   /** Stroke trimming as in Core Animation: a dash over a path normalized to length 1. */
   private applyTrim(el: HTMLElement, [start, end]: [number, number]): void {
     const path = el.firstElementChild as SVGPathElement;
@@ -553,5 +762,147 @@ export class DomHost implements Host {
         case "shadow": st.boxShadow = val === "" || val === false ? "" : "0 1px 2px rgba(0,0,0,.06), 0 4px 16px rgba(0,0,0,.08)"; break;
       }
     }
+  }
+}
+
+/** A `text` node's spans from the element: null without any (the value shows). */
+function parseSpans(raw: string | undefined): { text: string; bold?: boolean; italic?: boolean; color?: string; link?: string }[] | null {
+  if (!raw) return null;
+  try {
+    const runs = JSON.parse(raw) as unknown;
+    if (!Array.isArray(runs) || !runs.length) return null;
+    return runs.flatMap((r) => {
+      if (!r || typeof r !== "object" || Array.isArray(r)) return [];
+      const run = r as { text?: unknown; bold?: unknown; italic?: unknown; color?: unknown; link?: unknown };
+      const text = typeof run.text === "string" ? run.text : String(run.text ?? "");
+      if (!text) return [];
+      const out: { text: string; bold?: boolean; italic?: boolean; color?: string; link?: string } = { text };
+      if (run.bold === true) out.bold = true;
+      if (run.italic === true) out.italic = true;
+      if (typeof run.color === "string" && run.color) out.color = run.color;
+      if (typeof run.link === "string" && run.link) out.link = run.link;
+      return [out];
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** A span offset clamped into the text, so a malformed range measures nothing. */
+function clampOffset(n: unknown, length: number): number {
+  const v = typeof n === "number" ? n : 0;
+  return Number.isFinite(v) ? Math.min(length, Math.max(0, Math.floor(v))) : 0;
+}
+
+/** A range input's value clamped into [min, max] and snapped onto its step. */
+function snapRange(input: HTMLInputElement): number {
+  const min = input.min === "" ? 0 : Number(input.min);
+  const max = input.max === "" ? 1 : Number(input.max);
+  const raw = input.valueAsNumber;
+  const v = Math.min(max, Math.max(min, Number.isFinite(raw) ? raw : min));
+  const step = input.step === "" || input.step === "any" ? NaN : Number(input.step);
+  if (!Number.isFinite(step) || step <= 0) return v;
+  const snapped = min + Math.round((v - min) / step) * step;
+  return Math.min(max, Math.max(min, snapped));
+}
+
+/** Measures a real control off screen for `measureControl`. Unknown types measure nothing. */
+function probeControl(type: string): Size {
+  const input = document.createElement("input");
+  if (type === "slider") input.type = "range";
+  else if (type === "timePicker") input.type = "time";
+  else return { width: 0, height: 0 };
+  // The same classes the rendered control gets, so the measured size matches what is drawn.
+  input.className = `jig jig-${type}`;
+  input.style.cssText = "position:absolute;left:-100000px;top:0;visibility:hidden;";
+  document.body.appendChild(input);
+  const r = input.getBoundingClientRect();
+  input.remove();
+  return { width: Math.ceil(r.width), height: Math.ceil(r.height) };
+}
+
+/** A bundled sound (`@chime`) lives at /sounds/<name>.wav (vite.config.ts serves the repo's assets folder). */
+function mediaUrl(src: string): string {
+  return src.startsWith("@") ? `/sounds/${src.slice(1)}.wav` : src;
+}
+
+/** An image from an https or data URL, or a `jig-file:` URL resolved from the app's store. */
+function setImageSrc(img: HTMLImageElement, src: unknown): void {
+  const raw = String(src ?? "");
+  if (raw.startsWith("jig-file:")) {
+    img.dataset.jigSrc = raw;
+    void fileUrl(raw).then(
+      (url) => {
+        if (img.dataset.jigSrc !== raw) return;
+        img.src = url;
+      },
+      () => {
+        if (img.dataset.jigSrc === raw) img.removeAttribute("src");
+      },
+    );
+    return;
+  }
+  delete img.dataset.jigSrc;
+  img.src = raw;
+}
+
+function setMediaSrc(media: HTMLMediaElement, src: unknown): void {
+  const raw = String(src ?? "");
+  if (raw.startsWith("jig-file:")) {
+    // Like images: resolve the store file to an object URL, ignoring a source
+    // that changed while it loaded.
+    media.dataset.jigSrc = raw;
+    void fileUrl(raw).then(
+      (url) => {
+        if (media.dataset.jigSrc !== raw) return;
+        delete media.dataset.jigSrc;
+        setMediaUrl(media, url);
+      },
+      () => {
+        if (media.dataset.jigSrc === raw) delete media.dataset.jigSrc;
+      },
+    );
+    return;
+  }
+  delete media.dataset.jigSrc;
+  setMediaUrl(media, mediaUrl(raw));
+}
+
+function setMediaUrl(media: HTMLMediaElement, url: string): void {
+  const current = media.dataset.src;
+  if (current === url) return;
+  media.dataset.src = url;
+  media.src = url;
+  media.load();
+  // `playing` may have arrived before `src`: start when the node wants to play.
+  if (media.dataset.playing === "1") void setMediaPlaying(media, true);
+}
+
+/**
+ * Browsers block playback until the user has tapped the page: when `play()` is
+ * refused, try again on the next tap instead of staying silent.
+ */
+function setMediaPlaying(media: HTMLMediaElement, playing: boolean): void {
+  media.dataset.playing = playing ? "1" : "0";
+  if (!playing) {
+    media.pause();
+    return;
+  }
+  if (!media.dataset.src && media.src) media.dataset.src = media.src;
+  const attempt = media.play();
+  if (attempt && typeof attempt.catch === "function") {
+    attempt.catch(() => {
+      if (media.dataset.retry) return;
+      media.dataset.retry = "1";
+      const retry = () => {
+        delete media.dataset.retry;
+        // The tap may have come from another control; only resume a node that still wants to play.
+        if (media.isConnected && media.dataset.playing !== "0") {
+          const next = media.play();
+          if (next && typeof next.catch === "function") next.catch(() => {});
+        }
+      };
+      window.addEventListener("pointerdown", retry, { once: true, capture: true });
+    });
   }
 }

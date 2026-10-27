@@ -8,6 +8,7 @@
 
 import { jsonLines } from "./builder/code.ts";
 import { flow } from "./builder/flow.ts";
+import { sunPosition, sunTimes } from "./sun.ts";
 
 export interface Scope {
   /** Returns undefined for unknown names; throws are reserved for real errors. */
@@ -15,9 +16,31 @@ export interface Scope {
   has(name: string): boolean;
 }
 
-export type Compiled = (scope: Scope) => unknown;
+export type Compiled = ((scope: Scope) => unknown) & { reads?: readonly string[] };
 
 export class ExprError extends Error {}
+
+// ---------- Deterministic clock ----------
+// Headless widget renders set this while they run, so `now()`, `today()` and the
+// runtime's `clock` read the entry's time instead of the real one. Module-local,
+// never the global Date, so the rest of the container keeps real time.
+let clockOverride: number | null = null;
+
+/** The time builtins and live sources read: the widget entry's, or real time. */
+export function effectiveNow(): number {
+  return clockOverride ?? Date.now();
+}
+
+/** Runs `fn` with the clock fixed at `now` (nested calls restore the outer one). */
+export function withClock<T>(now: number, fn: () => T): T {
+  const prev = clockOverride;
+  clockOverride = now;
+  try {
+    return fn();
+  } finally {
+    clockOverride = prev;
+  }
+}
 
 // ---------- Tokenizer ----------
 
@@ -132,6 +155,9 @@ class Parser {
   toks: Tok[];
   pos = 0;
   src: string;
+  /** Names read from the scope while compiling (lambda params excluded). */
+  reads = new Set<string>();
+  private bound = new Map<string, number>();
 
   constructor(src: string) {
     this.src = src;
@@ -171,7 +197,9 @@ class Parser {
     if (t.t === "id" && this.isOp("=>", 1)) {
       this.pos += 2;
       const name = t.v;
+      this.bind(name);
       const body = this.expr();
+      this.unbind(name);
       return (s) => ({ __lambda: true, call: (arg: unknown) => body(childScope(s, { [name]: arg })) }) satisfies Lambda;
     }
     // Two-param arrow: `(a, b) => a.n - b.n`
@@ -179,7 +207,11 @@ class Parser {
       const a = (this.peek(1) as { v: string }).v;
       const b = (this.peek(3) as { v: string }).v;
       this.pos += 6;
+      this.bind(a);
+      this.bind(b);
       const body = this.expr();
+      this.unbind(a);
+      this.unbind(b);
       return (s) => ({ __lambda: true, call: (x: unknown, y: unknown) => body(childScope(s, { [a]: x, [b]: y })) }) satisfies Lambda;
     }
     return this.ternary();
@@ -351,10 +383,15 @@ class Parser {
         if (this.isOp("(")) {
           const fn = BUILTINS[name];
           if (!fn) throw new ExprError(`Unknown function '${name}'`);
+          // A builtin call reads no scope, except `now()` which reads the clock.
+          if (name === "now") this.read("now");
           const args = this.args();
           return (s) => fn(...args.map((a) => a(s)));
         }
         if (FORBIDDEN.has(name)) throw new ExprError(`Forbidden name '${name}'`);
+        // Builtin names never count as scope reads; a bare one could still be state,
+        // but no capability comes from it, so it stays out of `reads`.
+        if (!Object.hasOwn(BUILTINS, name)) this.read(name);
         return (s) => s.lookup(name);
       }
       case "op": {
@@ -382,6 +419,7 @@ class Parser {
               if (this.eat(":")) entries.push([k.v, this.expr()]);
               else {
                 const name = k.v;
+                if (k.t === "id" && !Object.hasOwn(BUILTINS, name)) this.read(name);
                 entries.push([name, (s) => s.lookup(name)]);
               }
             } while (this.eat(","));
@@ -396,6 +434,22 @@ class Parser {
       }
     }
     throw new ExprError(`Unexpected token in: ${this.src}`);
+  }
+
+  private bind(name: string): void {
+    this.bound.set(name, (this.bound.get(name) ?? 0) + 1);
+  }
+
+  private unbind(name: string): void {
+    const n = (this.bound.get(name) ?? 1) - 1;
+    if (n <= 0) this.bound.delete(name);
+    else this.bound.set(name, n);
+  }
+
+  private read(name: string): void {
+    if (FORBIDDEN.has(name)) return;
+    if (this.bound.has(name)) return;
+    this.reads.add(name);
   }
 }
 
@@ -433,6 +487,17 @@ function toDate(v: unknown): Date {
 
 function isoDay(d: Date): string {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+/** UTC midnight of the day `v` falls on. An ISO day is that UTC day; anything else keeps UTC. */
+function utcDayStart(v: unknown): number {
+  if (typeof v === "string") {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+    if (m) return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  }
+  const d = toDate(v);
+  if (isNaN(d.getTime())) return NaN;
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
 }
 
 function formatDate(v: unknown, fmt: unknown = "MMM d"): string {
@@ -515,8 +580,8 @@ export const BUILTINS: Record<string, (...args: unknown[]) => unknown> = {
   fixed: (v, d) => Number(v).toFixed(Number(d) || 0),
   pct: (v) => `${Math.max(0, Math.min(100, Number(v) * 100))}%`,
   plural: (n, one, many) => `${str(n)} ${Number(n) === 1 ? str(one) : str(many ?? `${str(one)}s`)}`,
-  now: () => Date.now(),
-  today: () => isoDay(new Date()),
+  now: () => effectiveNow(),
+  today: () => isoDay(new Date(effectiveNow())),
   day: (v) => isoDay(toDate(v)),
   addDays: (v, n) => {
     const d = toDate(v);
@@ -525,6 +590,8 @@ export const BUILTINS: Record<string, (...args: unknown[]) => unknown> = {
   },
   daysBetween: (a, b) => Math.round((toDate(b).getTime() - toDate(a).getTime()) / 86400000),
   formatDate: (v, f) => formatDate(v, f),
+  sunPosition: (lat, lon, when) => sunPosition(Number(lat), Number(lon), toDate(when).getTime()),
+  sunTimes: (lat, lon, date) => sunTimes(Number(lat), Number(lon), utcDayStart(date)),
   uid: () => `${Date.now().toString(36)}${(uidCounter++).toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`,
   // SVG arc path for rings and pies: arc(cx, cy, r, startDeg, endDeg). 0° is 12 o'clock.
   arc: (cx, cy, r, a0, a1) => {
@@ -553,7 +620,10 @@ export function compile(src: string): Compiled {
   if (!fn) {
     // A bare expression written as a binding ("if": "{{done}}") means the same thing.
     const bound = /^\s*\{\{([\s\S]*)\}\}\s*$/.exec(src);
-    fn = new Parser(bound && !bound[1].includes("}}") ? bound[1] : src).parse();
+    const parser = new Parser(bound && !bound[1].includes("}}") ? bound[1] : src);
+    const inner = parser.parse();
+    inner.reads = [...parser.reads];
+    fn = inner;
     cache.set(src, fn);
   }
   return fn;
@@ -583,6 +653,29 @@ export function compileTemplate(src: string): Compiled | null {
 
 export function evaluate(src: string, scope: Scope): unknown {
   return compile(src)(scope);
+}
+
+// ---------- Free identifiers ----------
+// The names an expression reads from its scope: for capability validation (which live values
+// an app uses) and for subscribing `now()` bindings to the clock. Bound names (lambda params),
+// property names, object keys and builtin function names don't count (except `now()`, which
+// reads the clock). Recorded by `Parser` itself and attached to each compiled function.
+
+/**
+ * Names `src` reads: every `{{ }}` part when it has bindings, else `src` as one bare
+ * expression. Never throws (a broken expression is reported when it is compiled).
+ */
+export function freeIdentifiers(src: string): string[] {
+  const out = new Set<string>();
+  const parts = src.includes("{{") ? [...src.matchAll(/\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]) : [src];
+  for (const part of parts) {
+    try {
+      for (const id of compile(part).reads ?? []) out.add(id);
+    } catch {
+      // Reported when compiled; no capabilities from a broken expression.
+    }
+  }
+  return [...out];
 }
 
 // ---------- Assignment targets ----------

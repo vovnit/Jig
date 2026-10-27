@@ -1,0 +1,201 @@
+{
+  "id": "books",
+  "name": "Books",
+  "description": "Your EPUB library: open books and read them chapter by chapter.",
+  "theme": { "accent": "#7c5cd6" },
+  "capabilities": ["files"],
+  "data": {
+    "books": {
+      "type": "list",
+      "fields": { "id": "string", "title": "string", "author": "string", "file": "object", "chapters": "list", "chapter": "number" },
+      "default": []
+    }
+  },
+  "state": { "open": "", "picked": null, "blocks": [], "images": [], "notice": "" },
+  "screens": {
+    "main": {
+      "title": "Books",
+      "body": {
+        "type": "column",
+        "style": { "gap": 16 },
+        "children": [
+          {
+            "type": "text",
+            "variant": "callout",
+            "if": "notice != ''",
+            "value": "{{notice}}",
+            "style": { "color": "danger" }
+          },
+          {
+            "type": "button",
+            "label": "Add book",
+            "onTap": {
+              "pickFile": { "accept": ["epub"] },
+              "then": [
+                { "set": "picked", "to": "value" },
+                {
+                  "openBook": { "file": "picked" },
+                  "then": {
+                    "push": "books",
+                    "value": { "id": "uid()", "title": "value.title", "author": "value.author", "file": "picked", "chapters": "value.chapters", "chapter": "0" }
+                  },
+                  "else": { "set": "notice", "to": "error" }
+                }
+              ]
+            }
+          },
+          {
+            "type": "list",
+            "items": "books",
+            "as": "book",
+            "empty": "No books yet. Add an EPUB to start reading.",
+            "footer": "Your place in each book is remembered.",
+            "onTap": [
+              { "set": "open", "to": "book.id" },
+              { "set": "blocks", "to": "[]" },
+              { "set": "images", "to": "[]" },
+              { "set": "notice", "to": "''" },
+              { "navigate": "reader" },
+              {
+                "readChapter": { "file": "book.file", "href": "book.chapters[book.chapter].href" },
+                "then": { "set": "blocks", "to": "value" },
+                "else": { "set": "notice", "to": "error" }
+              }
+            ],
+            "swipe": [{ "label": "Delete", "do": { "remove": "book" } }],
+            "row": {
+              "type": "column",
+              "style": { "gap": 2 },
+              "children": [
+                { "type": "text", "variant": "headline", "value": "{{book.title}}" },
+                { "type": "text", "variant": "caption", "value": "{{book.author}}" },
+                { "type": "text", "variant": "caption", "value": "Chapter {{book.chapter + 1}} of {{len(book.chapters)}}", "style": { "color": "muted" } }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "reader": {
+      "title": "{{find(books, b => b.id == open).title}}",
+      "body": {
+        "type": "column",
+        "style": { "gap": 12 },
+        "children": [
+          {
+            "type": "text",
+            "variant": "callout",
+            "if": "notice != ''",
+            "value": "{{notice}}",
+            "style": { "color": "danger" }
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "{{find(books, b => b.id == open).chapters[find(books, b => b.id == open).chapter].title}}"
+          },
+          {
+            "type": "row",
+            "style": { "gap": 12, "align": "center" },
+            "children": [
+              {
+                "type": "button", "label": "‹ Prev", "variant": "secondary", "style": { "grow": 1 },
+                "onTap": {
+                  "if": "find(books, b => b.id == open).chapter > 0",
+                  "then": [
+                    { "set": "books", "to": "map(books, b => b.id == open ? {id: b.id, title: b.title, author: b.author, file: b.file, chapters: b.chapters, chapter: b.chapter - 1} : b)" },
+                    { "set": "blocks", "to": "[]" },
+                    { "set": "images", "to": "[]" },
+                    {
+                      "readChapter": { "file": "find(books, b => b.id == open).file", "href": "find(books, b => b.id == open).chapters[find(books, b => b.id == open).chapter].href" },
+                      "then": { "set": "blocks", "to": "value" },
+                      "else": { "set": "notice", "to": "error" }
+                    }
+                  ]
+                }
+              },
+              {
+                "type": "button", "label": "Next ›", "variant": "secondary", "style": { "grow": 1 },
+                "onTap": {
+                  "if": "find(books, b => b.id == open).chapter < len(find(books, b => b.id == open).chapters) - 1",
+                  "then": [
+                    { "set": "books", "to": "map(books, b => b.id == open ? {id: b.id, title: b.title, author: b.author, file: b.file, chapters: b.chapters, chapter: b.chapter + 1} : b)" },
+                    { "set": "blocks", "to": "[]" },
+                    { "set": "images", "to": "[]" },
+                    {
+                      "readChapter": { "file": "find(books, b => b.id == open).file", "href": "find(books, b => b.id == open).chapters[find(books, b => b.id == open).chapter].href" },
+                      "then": { "set": "blocks", "to": "value" },
+                      "else": { "set": "notice", "to": "error" }
+                    }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "items": "blocks",
+            "as": "block",
+            "variant": "plain",
+            "separators": false,
+            "empty": "Loading chapter…",
+            "rowStyle": { "paddingY": 4 },
+            "row": {
+              "type": "column",
+              "children": [
+                {
+                  "type": "text",
+                  "if": "block.kind != 'image' && block.kind != 'hr'",
+                  "spans": "{{block.spans}}",
+                  "variant": "{{block.kind == 'h1' ? 'title' : (block.kind == 'h2' || block.kind == 'h3' ? 'headline' : 'body')}}",
+                  "style": { "color": "{{block.kind == 'quote' ? 'muted' : 'text'}}" },
+                  "onLink": { "set": "notice", "to": "'Link: ' + value" }
+                },
+                { "type": "divider", "if": "block.kind == 'hr'" },
+                {
+                  "type": "column",
+                  "if": "block.kind == 'image'",
+                  "children": [
+                    {
+                      "type": "image",
+                      "if": "find(images, i => i.src == block.src) != null",
+                      "src": "{{find(images, i => i.src == block.src).url}}"
+                    },
+                    {
+                      "type": "button",
+                      "if": "find(images, i => i.src == block.src) == null",
+                      "label": "Show image",
+                      "variant": "secondary",
+                      "onTap": {
+                        "bookImage": { "file": "find(books, b => b.id == open).file", "src": "block.src" },
+                        "then": { "push": "images", "value": { "src": "block.src", "url": "value" } },
+                        "else": { "set": "notice", "to": "error" }
+                      }
+                    }
+                  ]
+                }
+              ]
+            }
+          },
+          { "type": "text", "variant": "headline", "value": "Chapters" },
+          {
+            "type": "list",
+            "items": "find(books, b => b.id == open).chapters",
+            "as": "chapter",
+            "row": { "type": "text", "value": "{{chapter.title}}", "variant": "{{index == find(books, b => b.id == open).chapter ? 'headline' : 'body'}}" },
+            "onTap": [
+              { "set": "books", "to": "map(books, b => b.id == open ? {id: b.id, title: b.title, author: b.author, file: b.file, chapters: b.chapters, chapter: index} : b)" },
+              { "set": "blocks", "to": "[]" },
+              { "set": "images", "to": "[]" },
+              {
+                "readChapter": { "file": "find(books, b => b.id == open).file", "href": "find(books, b => b.id == open).chapters[index].href" },
+                "then": { "set": "blocks", "to": "value" },
+                "else": { "set": "notice", "to": "error" }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

@@ -4,16 +4,17 @@
 //   event → actions update state → bound effects update specific nodes
 //         → dirty layout → frame: incremental layout → ops batch → host.apply
 
-import type { Host, Op, Props, Size } from "./bridge.ts";
+import type { Host, Op, Props, Size, TextSpanStyle } from "./bridge.ts";
 import { BUILTIN_COMPONENTS, COLOR_KEYS, SHAPES, TYPE_ALIASES, defaultStyle } from "./builtins.ts";
-import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, setIn, str } from "./expr.ts";
+import { openEpub, readEpubChapter, readEpubImage, type ZipSource } from "./epub.ts";
+import { type Compiled, type Scope, childScope, compile, compilePath, compileTemplate, effectiveNow, freeIdentifiers, setIn, str } from "./expr.ts";
 import { type Box, type Frame, LAYOUT_KEYS, ViewNode, isContainer, layoutRoot, parseBox } from "./layout.ts";
 import { type Owner, Signal, effect, getOwner, onCleanup, root, untrack } from "./signals.ts";
 import { DataStore } from "./store.ts";
-import { type Action, type Actions, type AppSpec, type ColorScheme, DEFAULT_THEME, type FieldSpec, type ListSpec, NODE_TYPES, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
+import { type Action, type Actions, type AppSpec, type ColorScheme, ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, type FieldSpec, type ListSpec, NODE_TYPES, type ScreenTransition, type NodeSpec, type ScreenSpec, TYPOGRAPHY, type TextStyle, resolveTheme } from "./spec.ts";
 
-const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "onPage", "onSelect", "props", "$path"]);
-const MEASURED_PROPS = new Set(["value", "label", "variant", "src", "placeholder"]);
+const RESERVED = new Set(["type", "style", "children", "child", "if", "each", "as", "indexAs", "key", "bind", "onTap", "onChange", "onSubmit", "onLink", "onPage", "onSelect", "onEnded", "onTime", "props", "$path"]);
+const MEASURED_PROPS = new Set(["value", "label", "spans", "variant", "src", "placeholder"]);
 const TEXT_METRIC_KEYS = ["fontSize", "fontWeight", "lineHeight", "fontFamily"] as const;
 
 interface NavEntry {
@@ -29,6 +30,10 @@ interface Handlers {
   onTap?: Actions;
   onChange?: Actions;
   onSubmit?: Actions;
+  /** A tap on a `text` span with a `link` (`value` is its URL). */
+  onLink?: Actions;
+  onEnded?: Actions;
+  onTime?: Actions;
   /** A paging hscroll settled on a page (`value` is its index). */
   onPage?: Actions;
   bind?: string;
@@ -94,6 +99,8 @@ export interface RuntimeOptions {
   embedded?: boolean;
   /** The shell: may call the builder's services. Set by the host, never by a spec. */
   trusted?: boolean;
+  /** Whether the app may use a capability that asks (the shell asks the user). Without one, a declared capability is allowed. */
+  gate?: (app: AppSpec, capability: string) => boolean | Promise<boolean>;
 }
 
 /** An app shown inside an `app` node: its own runtime, laid out at the node's size. */
@@ -117,6 +124,21 @@ export interface RuntimeError {
   message: string;
 }
 
+/** One subscriber of a shared host watch: an update fan-out and an error report. */
+interface WatchSub {
+  push: (update: Record<string, unknown>) => void;
+  fail: (message: string) => void;
+}
+
+/** The top-level runtime's host watch for one live value, shared by every app that reads it. */
+interface WatchHub {
+  subs: Set<WatchSub>;
+  latest: Record<string, unknown> | null;
+  hasLatest: boolean;
+  error: string | null;
+  stopUpstream: (() => void) | null;
+}
+
 const now = (host: Host) => host.now?.() ?? (globalThis as { performance?: { now(): number } }).performance?.now() ?? Date.now();
 
 function defaultFor(f: FieldSpec): unknown {
@@ -126,6 +148,7 @@ function defaultFor(f: FieldSpec): unknown {
     case "number": return 0;
     case "boolean": return false;
     case "object": return {};
+    case "file": return null;
     default: return "";
   }
 }
@@ -157,10 +180,15 @@ export class Runtime {
   viewport = { width: 390, height: 844, insets: [0, 0, 0, 0] as [number, number, number, number] };
   errors: RuntimeError[] = [];
   stats: FrameStats = emptyStats();
+  onFrame?: () => void;
+  onLocation?: (value: Record<string, unknown>) => void;
+  snapshot(): Record<string, unknown> { return Object.fromEntries([...this.signals].map(([k, v]) => [k, v.peek()])); }
   onStats?: (s: FrameStats) => void;
 
   readonly embedded: boolean;
   readonly trusted: boolean;
+  /** Whether the app may use a capability that asks; child runtimes inherit their parent's. */
+  gate?: (app: AppSpec, capability: string) => boolean | Promise<boolean>;
   /** Container services the trusted shell calls with `{"call": name, "args": {...}}`. */
   services = new Map<string, (args: Record<string, unknown>) => void>();
   private embeds = new Set<Embedded>();
@@ -174,28 +202,40 @@ export class Runtime {
   private frameRequested = false;
   private saveRequested = false;
   private store: DataStore | null = null;
+  /** Live values (clock): reactive cells the global scope reads, fed by a source. */
+  private live = new Map<string, Signal<unknown>>();
+  /** Stop functions of started live sources, by value name. */
+  private liveSources = new Map<string, () => void>();
+  /** Shared host watches (location, heading): one host watch feeds every subscriber. */
+  private watchHubs = new Map<string, WatchHub>();
   /** Last value written to secure storage per secret key (undefined: none stored). */
   private savedSecrets = new Map<string, unknown>();
   private appOwner: Owner | null = null;
   private textCache = new Map<string, Size>();
   private globalScope: Scope;
+  /** Bumped in `load` and `dispose`: async answers from an older generation are dropped. */
+  private generation = 0;
 
   constructor(host: Host, options: RuntimeOptions = {}) {
     this.host = host;
     this.embedded = options.embedded ?? false;
     this.trusted = options.trusted ?? false;
+    this.gate = options.gate;
     // An embedded app's root is an ordinary container inside the parent's `app` node.
     this.root = this.createNode(this.embedded ? "column" : "root");
     this.mount(this.root);
     const signals = this.signals;
+    const live = this.live;
     this.globalScope = {
       lookup: (name) => {
         const s = signals.get(name);
         if (s) return s.get();
         if (name === "params") return this.nav.get().at(-1)?.params ?? {};
+        // Live values come after state and data.
+        if (live.has(name) || Object.hasOwn(LIVE, name)) return this.liveSignal(name).get();
         return undefined;
       },
-      has: (name) => signals.has(name) || name === "params",
+      has: (name) => signals.has(name) || name === "params" || live.has(name) || Object.hasOwn(LIVE, name),
     };
   }
 
@@ -206,7 +246,10 @@ export class Runtime {
    * edit and the navigation stack are kept; `fresh` starts a different app clean.
    */
   load(spec: AppSpec, { fresh = false, screen }: { fresh?: boolean; screen?: string } = {}): void {
+    this.generation++;
+    this.restoreDevice();
     this.appOwner?.dispose();
+    this.stopLive();
     this.pinned = screen && spec.screens[screen] ? screen : null;
     if (fresh || this.spec?.id !== spec.id) this.savedSecrets.clear();
     if (fresh) {
@@ -242,6 +285,10 @@ export class Runtime {
     this.shownStack = null;
     root(() => {
       this.appOwner = getOwner();
+      if (spec.schedule) effect(() => {
+        for (const signal of this.signals.values()) signal.get();
+        untrack(() => this.scheduleFrame());
+      });
       // Persist data whenever it changes.
       effect(() => {
         for (const k of this.dataKeys) this.signals.get(k)?.get();
@@ -265,10 +312,13 @@ export class Runtime {
 
   /** Tears the app down: an embedded app whose `app` node went away. */
   dispose(): void {
+    this.generation++;
+    this.restoreDevice();
     this.screenOwner?.();
     this.screenOwner = null;
     this.appOwner?.dispose();
     this.appOwner = null;
+    this.stopLive();
     for (const e of this.embeds) e.rt.dispose();
     this.embeds.clear();
   }
@@ -318,13 +368,20 @@ export class Runtime {
     // Actions run sequentially without batching, so each one sees the state the previous one wrote.
     {
       if (name === "tap" && h.onTap) this.run(h.onTap, h.scope);
+      if (name === "link" && h.onLink) this.run(h.onLink, childScope(h.scope, { value: String(payload.url ?? "") }));
       if (name === "change") {
-        const value = payload.value;
+        let value: unknown = payload.value;
+        if (node.type === "slider") {
+          const n = Number(value);
+          value = Number.isFinite(n) ? n : 0;
+        }
         this.nativeValues.set(id, value);
         node.props.value = value;
         if (h.bind) this.assign(h.bind, h.scope, coerce(value, this.peekPath(h.bind, h.scope)));
         if (h.onChange) this.run(h.onChange, childScope(h.scope, { value }));
       }
+      if (name === "ended" && h.onEnded) this.run(h.onEnded, childScope(h.scope, { value: payload }));
+      if (name === "time" && h.onTime) this.run(h.onTime, childScope(h.scope, { value: payload }));
       if (name === "submit" && h.onSubmit) this.run(h.onSubmit, h.scope);
       if (name === "page" && h.onPage) this.run(h.onPage, childScope(h.scope, { value: Number(payload.index) || 0 }));
       if (name === "swipe" && h.onSwipe) h.onSwipe(Number(payload.index) || 0);
@@ -410,6 +467,7 @@ export class Runtime {
     }
     this.stats.ops += ops.length;
     if (this.saveRequested) this.save();
+    this.onFrame?.();
     const waiters = this.frameWaiters;
     this.frameWaiters = [];
     for (const w of waiters) w();
@@ -425,6 +483,169 @@ export class Runtime {
 
   set(key: string, value: unknown): void {
     this.signals.get(key)?.set(value);
+  }
+
+  // ---------- Live values ----------
+
+  /** The cell of a live value, starting its source the first time it is read. */
+  private liveSignal(name: string): Signal<unknown> {
+    let s = this.live.get(name);
+    if (!s) {
+      s = new Signal<unknown>(name === "clock" ? effectiveNow() : null);
+      this.live.set(name, s);
+      if (!this.liveSources.has(name)) {
+        const stop = LIVE[name]?.(this);
+        if (stop) this.liveSources.set(name, stop);
+      }
+    }
+    return s;
+  }
+
+  /**
+   * A live update: sets the value's cell (creating it when nothing reads it yet).
+   * The clock ticks through here; later sources the host pushes (location) will too.
+   */
+  pushLive(name: string, value: unknown): void {
+    this.liveSignal(name).set(value);
+  }
+
+  private stopLive(): void {
+    for (const stop of this.liveSources.values()) stop();
+    this.liveSources.clear();
+    this.live.clear();
+  }
+
+  /**
+   * Shares one host watch between every runtime that reads the value: the top-level
+   * runtime owns the host watch, embedded ones subscribe through their child host.
+   * The host watch starts on the first subscriber, every update reaches all of them,
+   * a new subscriber gets the latest value at once, and the last unsubscribe stops it.
+   */
+  subscribeLocation(push: (update: Record<string, unknown>) => void, fail: (message: string) => void): () => void {
+    return this.subscribeShared("location", push, fail);
+  }
+
+  subscribeHeading(push: (update: Record<string, unknown>) => void, fail: (message: string) => void): () => void {
+    return this.subscribeShared("heading", push, fail);
+  }
+
+  private subscribeShared(kind: "location" | "heading", push: (update: Record<string, unknown>) => void, fail: (message: string) => void): () => void {
+    let hub = this.watchHubs.get(kind);
+    if (!hub) {
+      hub = { subs: new Set(), latest: null, hasLatest: false, error: null, stopUpstream: null };
+      this.watchHubs.set(kind, hub);
+    }
+    const sub: WatchSub = { push, fail };
+    hub.subs.add(sub);
+    // A failed watch keeps its terminal error for late joiners, but its upstream is
+    // dead: each join after a failure restarts it once, so the new subscriber gets
+    // live updates (or the next error) instead of joining a dead watch.
+    const failed = hub.error !== null;
+    if (hub.hasLatest && hub.latest) {
+      try {
+        push(hub.latest);
+      } catch {
+        // A subscriber never breaks the hub.
+      }
+    }
+    if (hub.error !== null) {
+      try { fail(hub.error); } catch { /* A subscriber never breaks the hub. */ }
+    }
+    if (failed) this.startShared(kind);
+    else if (hub.subs.size === 1) this.startShared(kind);
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      if (!hub!.subs.delete(sub)) return;
+      if (hub!.subs.size === 0) this.stopShared(kind);
+    };
+  }
+
+  private distributeShared(kind: "location" | "heading", update: Record<string, unknown>): void {
+    const hub = this.watchHubs.get(kind);
+    if (!hub) return;
+    if (kind === "location") this.onLocation?.(update);
+    hub.error = null;
+    hub.latest = update;
+    hub.hasLatest = true;
+    for (const s of [...hub.subs]) {
+      try {
+        s.push(update);
+      } catch {
+        // A subscriber never breaks the hub.
+      }
+    }
+  }
+
+  private failShared(kind: "location" | "heading", message: string): void {
+    const hub = this.watchHubs.get(kind);
+    if (!hub) return;
+    hub.error = message;
+    for (const s of [...hub.subs]) {
+      try {
+        s.fail(message);
+      } catch {
+        // A subscriber never breaks the hub.
+      }
+    }
+  }
+
+  /** Starts the upstream feed for the first subscriber: the parent's hub, or the host watch. */
+  private startShared(kind: "location" | "heading"): void {
+    const hub = this.watchHubs.get(kind);
+    if (!hub) return;
+    const upstream = kind === "location" ? this.host.subscribeLocation : this.host.subscribeHeading;
+    if (this.embedded && upstream) {
+      hub.stopUpstream =
+        upstream.call(
+          this.host,
+          (update) => this.distributeShared(kind, update),
+          (message) => this.failShared(kind, message),
+        ) ?? null;
+      return;
+    }
+    const call = this.host.call;
+    if (!call) {
+      hub.stopUpstream = null;
+      return;
+    }
+    call.call(
+      this.host,
+      `${kind}.watch`,
+      {},
+      (_result, error) => {
+        if (error) this.failShared(kind, error);
+      },
+      (update) => {
+        if (update && typeof update === "object") this.distributeShared(kind, update);
+      },
+    );
+    hub.stopUpstream = () => {
+      try {
+        this.host.call?.call(this.host, `${kind}.stop`, {}, () => {});
+      } catch {
+        // Stopping never fails the app.
+      }
+    };
+  }
+
+  private stopShared(kind: "location" | "heading"): void {
+    const hub = this.watchHubs.get(kind);
+    if (!hub) return;
+    this.watchHubs.delete(kind);
+    const stop = hub.stopUpstream;
+    hub.stopUpstream = null;
+    try {
+      stop?.();
+    } catch {
+      // Stopping never fails the app.
+    }
+  }
+
+  /** `now()` reads the clock without naming it; its binding still subscribes to ticks. */
+  private touchLive(src: string): void {
+    if (src.includes("now") && freeIdentifiers(src).includes("now")) this.liveSignal("clock").get();
   }
 
   // ---------- Screens ----------
@@ -579,6 +800,7 @@ export class Runtime {
           resolved[k] = typeof v === "string" ? this.evalTemplate(v, scope, `${where}.style.${k}`) : v;
         }
       }
+      if (type === "audio") Object.assign(resolved, { width: 0, height: 0, minWidth: 0, minHeight: 0, padding: 0, margin: 0, grow: 0, flexGrow: 0, flex: 0 });
       untrack(() => this.applyStyle(node, resolved));
     });
 
@@ -587,6 +809,9 @@ export class Runtime {
     if (spec.onTap) h.onTap = spec.onTap;
     if (spec.onChange) h.onChange = spec.onChange;
     if (spec.onSubmit) h.onSubmit = spec.onSubmit;
+    if (spec.onLink) h.onLink = spec.onLink;
+    if (spec.onEnded) h.onEnded = spec.onEnded;
+    if (spec.onTime) h.onTime = spec.onTime;
     if (spec.onPage) h.onPage = spec.onPage as Actions;
     if (spec.bind) {
       h.bind = spec.bind;
@@ -596,11 +821,14 @@ export class Runtime {
         untrack(() => {
           // Don't echo back what the user is typing: the cursor would jump.
           if (this.nativeValues.has(node.id) && looseSame(this.nativeValues.get(node.id), v)) return;
-          this.setProp(node, "value", type === "toggle" ? Boolean(v) : str(v));
+          if (type === "slider") {
+            const n = Number(v);
+            this.setProp(node, "value", Number.isFinite(n) ? n : 0);
+          } else this.setProp(node, "value", type === "toggle" ? Boolean(v) : str(v));
         });
       });
     }
-    if (h.onTap || h.onChange || h.onSubmit || h.onPage || h.bind) {
+    if (h.onTap || h.onChange || h.onSubmit || h.onLink || h.onPage || h.onEnded || h.onTime || h.bind) {
       this.handlers.set(node.id, h);
       if (h.onTap && type !== "button") node.props.tappable = true;
     }
@@ -753,12 +981,24 @@ export class Runtime {
         e.frames.push(cb);
         this.scheduleFrame();
       },
+      after: this.host.after && ((ms, cb) => this.host.after!(ms, cb)),
+      call: (service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void, progress?: (update: Record<string, unknown>) => void) => {
+        // An embedded app reaches only its declared async services; the shell's stay shell-only.
+        const parent = this.host.call;
+        if (parent && Object.hasOwn(ASYNC_ACTIONS, service)) parent.call(this.host, service, args, done, progress);
+        else done(null, "Not allowed");
+      },
+      // Embedded apps share the top-level runtime's host watches instead of starting their own.
+      // Declaration and permission checks happen where the live value is read.
+      // Intermediate app containers only forward the already-authorized subscription.
+      subscribeLocation: (push, fail) => this.subscribeLocation(push, fail),
+      subscribeHeading: (push, fail) => this.subscribeHeading(push, fail),
       db: this.host.db,
       secrets: this.host.secrets,
       now: this.host.now && (() => this.host.now!()),
       log: this.host.log && ((level, message) => this.host.log!(level, message)),
     };
-    e.rt = new Runtime(child, { embedded: true });
+    e.rt = new Runtime(child, { embedded: true, gate: this.gate });
     e.rt.colorScheme = this.colorScheme;
     if (spec.onSelect) e.rt.onSelect = (info) => this.run(spec.onSelect as Actions, childScope(scope, { value: info }));
     this.embeds.add(e);
@@ -1137,9 +1377,26 @@ export class Runtime {
 
   private resolveProp(node: ViewNode, key: string, v: unknown): unknown {
     if (COLOR_KEYS.has(key) && typeof v === "string") return this.theme[v] ?? v;
+    if (key === "spans" && Array.isArray(v)) return v.map((s) => this.resolveSpan(s));
     if (key === "path" && typeof v === "string" && v.startsWith("@")) return SHAPES[v.slice(1)] ?? "";
-    if ((key === "value" || key === "label") && node.type !== "toggle" && typeof v !== "string") return str(v);
+    if (key === "src" && v && typeof v === "object" && !Array.isArray(v)) {
+      // A file handle as `src`: the host loads `jig-file:<app>/<id>` from the app's store.
+      const id = (v as Record<string, unknown>).id;
+      if (typeof id === "string" && id) return `jig-file:${this.spec?.id ?? "app"}/${id}`;
+      return "";
+    }
+    if ((key === "value" || key === "label") && node.type !== "toggle" && node.type !== "slider" && typeof v !== "string") return str(v);
     return v;
+  }
+
+  /** One styled run: its text as a string, its color through the theme like any other. */
+  private resolveSpan(s: unknown): unknown {
+    if (!s || typeof s !== "object" || Array.isArray(s)) return { text: str(s) };
+    const span = s as Record<string, unknown>;
+    const out: Record<string, unknown> = { ...span, text: typeof span.text === "string" ? span.text : str(span.text ?? "") };
+    if (typeof out.color === "string") out.color = this.theme[out.color] ?? out.color;
+    if (typeof out.link !== "string") delete out.link;
+    return out;
   }
 
   private setProp(node: ViewNode, key: string, value: unknown): void {
@@ -1285,6 +1542,12 @@ export class Runtime {
       }
       case "toggle":
         return this.controlSize("toggle", { width: 51, height: 31 });
+      case "slider": {
+        const s = this.controlSize("slider", { width: 160, height: 31 });
+        return { width: Number.isFinite(maxW) ? maxW : s.width, height: s.height };
+      }
+      case "timePicker":
+        return this.controlSize("timePicker", { width: 96, height: 34 });
       case "shape": {
         const vb = String(n.props.viewBox ?? "0 0 24 24").split(/[\s,]+/).map(Number);
         const vw = vb[2] || 24;
@@ -1317,17 +1580,23 @@ export class Runtime {
   }
 
   private measureText(text: string, n: ViewNode, maxW: number): Size {
+    // Spans replace the value: the host measures the concatenated spans exactly as it draws them.
+    const spans = n.type === "text" ? textSpans(n.props.spans) : null;
+    if (spans) text = spans.text;
     if (!text) return { width: 0, height: 0 };
     const ts = this.textStyles.get(n) ?? TYPOGRAPHY.body;
     const w = isFinite(maxW) ? Math.floor(maxW) : 100000;
-    const k = `${ts.fontFamily ?? ""}|${ts.fontSize}|${ts.fontWeight}|${ts.lineHeight}|${w}|${text}`;
+    const key = spans && spans.ranges.length
+      ? `|${spans.ranges.map((r) => `${r.start}-${r.end}${r.bold ? "b" : ""}${r.italic ? "i" : ""}`).join(",")}`
+      : "";
+    const k = `${ts.fontFamily ?? ""}|${ts.fontSize}|${ts.fontWeight}|${ts.lineHeight}|${w}|${text}${key}`;
     const hit = this.textCache.get(k);
     if (hit) {
       this.stats.measureCacheHits++;
       return hit;
     }
     const t0 = now(this.host);
-    const s = this.host.measureText(text, ts, w);
+    const s = this.host.measureText(text, spans && spans.ranges.length ? { ...ts, spans: spans.ranges } : ts, w);
     this.stats.measureMs += now(this.host) - t0;
     this.stats.measureCalls++;
     if (this.textCache.size > 5000) this.textCache.clear();
@@ -1347,6 +1616,7 @@ export class Runtime {
       return undefined;
     }
     try {
+      this.touchLive(src);
       return fn(scope);
     } catch (e) {
       this.error(where, (e as Error).message);
@@ -1364,6 +1634,7 @@ export class Runtime {
     }
     if (!fn) return src;
     try {
+      this.touchLive(src);
       return fn(scope);
     } catch (e) {
       this.error(where, (e as Error).message);
@@ -1378,6 +1649,11 @@ export class Runtime {
     }
   }
 
+  /** Records a runtime error from a live source (which lives outside the class). */
+  recordError(where: string, message: string): void {
+    this.error(where, message);
+  }
+
   run(actions: Actions, scope: Scope): void {
     for (const a of Array.isArray(actions) ? actions : [actions]) this.runOne(a, scope);
   }
@@ -1385,60 +1661,244 @@ export class Runtime {
   private runOne(a: Action, scope: Scope): void {
     const where = `action ${JSON.stringify(a)}`;
     try {
-      if ("set" in a) this.assign(a.set, scope, this.evalValue(a.to, scope, where));
-      else if ("toggle" in a) this.assign(a.toggle, scope, !this.readPath(a.toggle, scope));
-      else if ("push" in a) {
-        const list = this.readPath(a.push, scope);
-        this.assign(a.push, scope, [...(Array.isArray(list) ? list : []), this.evalValue(a.value, scope, where)]);
+      const first = Object.keys(a)[0];
+      if (first && Object.hasOwn(ASYNC_ACTIONS, first)) return this.runAsync(first, a, scope);
+      if ("set" in a) {
+        const s = a as { set: string; to: string };
+        this.assign(s.set, scope, this.evalValue(s.to, scope, where));
+      } else if ("toggle" in a) {
+        const t = a as { toggle: string };
+        this.assign(t.toggle, scope, !this.readPath(t.toggle, scope));
+      } else if ("push" in a) {
+        const p = a as { push: string; value: string | Record<string, unknown> };
+        const list = this.readPath(p.push, scope);
+        this.assign(p.push, scope, [...(Array.isArray(list) ? list : []), this.evalValue(p.value, scope, where)]);
       } else if ("remove" in a) {
-        if (a.at !== undefined || a.where !== undefined) {
-          const list = this.readPath(a.remove, scope);
+        const r = a as { remove: string; at?: string; where?: string };
+        if (r.at !== undefined || r.where !== undefined) {
+          const list = this.readPath(r.remove, scope);
           if (!Array.isArray(list)) return;
           let next: unknown[];
-          if (a.at !== undefined) {
-            const at = Number(this.evalExpr(a.at, scope, where));
+          if (r.at !== undefined) {
+            const at = Number(this.evalAction(r.at, scope, where));
             next = list.filter((_, i) => i !== at);
           } else {
-            next = list.filter((item, index) => !this.evalExpr(a.where!, childScope(scope, { item, index }), where));
+            next = list.filter((item, index) => !this.evalAction(r.where!, childScope(scope, { item, index }), where));
           }
-          this.assign(a.remove, scope, next);
+          this.assign(r.remove, scope, next);
         } else {
           // `{"remove": "item"}` inside `each`: remove that element from its list.
-          const loc = this.locateItem(scope.lookup(a.remove));
+          const loc = this.locateItem(scope.lookup(r.remove));
           if (loc) loc.signal.set((loc.signal.peek() as unknown[]).filter((_, i) => i !== loc.index));
         }
       } else if ("navigate" in a) {
+        const nv = a as { navigate: string; params?: Record<string, string>; transition?: ScreenTransition };
         const params: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(a.params ?? {})) params[k] = this.evalValue(v, scope, where);
-        if (!this.spec.screens[a.navigate]) return this.error(where, `Unknown screen '${a.navigate}'`);
+        for (const [k, v] of Object.entries(nv.params ?? {})) params[k] = this.evalValue(v, scope, where);
+        if (!this.spec.screens[nv.navigate]) return this.error(where, `Unknown screen '${nv.navigate}'`);
         if (this.pinned) return;
-        this.nav.set([...this.nav.peek(), { screen: a.navigate, params, transition: a.transition }]);
+        this.nav.set([...this.nav.peek(), { screen: nv.navigate, params, transition: nv.transition }]);
       } else if ("back" in a) {
         this.back();
       } else if ("if" in a) {
-        const branch = this.evalExpr(a.if, scope, where) ? a.then : a.else;
+        const c = a as { if: string; then: Action | Action[]; else?: Action | Action[] };
+        const branch = this.evalAction(c.if, scope, where) ? c.then : c.else;
         if (branch) this.run(branch, scope);
       } else if ("call" in a) {
         // Container services act outside the app: only the shell may use them.
         if (!this.trusted) return this.error(where, "Only the shell can call services");
-        const service = this.services.get(a.call);
-        if (!service) return this.error(where, `Unknown service '${a.call}'`);
-        service((this.evalValue(a.args ?? {}, scope, where) ?? {}) as Record<string, unknown>);
+        const cl = a as { call: string; args?: Record<string, unknown> };
+        const service = this.services.get(cl.call);
+        if (!service) return this.error(where, `Unknown service '${cl.call}'`);
+        service((this.evalValue(cl.args ?? {}, scope, where) ?? {}) as Record<string, unknown>);
       } else this.error(where, "Unknown action");
     } catch (e) {
       this.error(where, (e as Error).message);
     }
   }
 
-  /** An action value is an expression string, or an object whose values are expressions. */
+  private deviceCleanup = new Map<string, Record<string, unknown>>();
+
+  private restoreDevice(): void {
+    for (const [service, args] of this.deviceCleanup) {
+      try { this.host.call?.(service, args, () => {}); } catch { /* Best effort on teardown. */ }
+    }
+    this.deviceCleanup.clear();
+  }
+
+  /**
+   * An async host service (see ASYNC_ACTIONS): `{"<name>": {args}, "then"?, "else"?}`. The args
+   * are evaluated, then the host answers later: `then` runs with the result as `value`, `else`
+   * with the failure as `error`. Undeclared capabilities and denied ones go to `else` too.
+   */
+  private runAsync(name: string, a: Action, scope: Scope): void {
+    const info = ASYNC_ACTIONS[name];
+    const where = `action ${JSON.stringify(a)}`;
+    const branch = a as { then?: Actions; else?: Actions };
+    const evaluated = this.evalValue((a as Record<string, unknown>)[name] ?? {}, scope, where);
+    const args = evaluated && typeof evaluated === "object" && !Array.isArray(evaluated) ? (evaluated as Record<string, unknown>) : {};
+    // The spec and generation at dispatch time: the gate runs a microtask later, by
+    // which another app may have loaded (or this one disposed). Then it must not run.
+    const spec = this.spec;
+    const gen = this.generation;
+    const fail = (message: string) => {
+      if (gen !== this.generation) return;
+      this.error(where, message);
+      if (branch.else) this.run(branch.else, childScope(scope, { error: message }));
+    };
+    if (!this.spec.capabilities?.includes(info.capability)) {
+      fail(`uses '${info.capability}'; add "${info.capability}" to capabilities`);
+      return;
+    }
+    void Promise.resolve()
+      .then(() => {
+        if (gen !== this.generation) return undefined;
+        return CAPABILITIES[info.capability]?.asks === false || !this.gate ? true : this.gate(spec, info.capability);
+      })
+      .then((allowed) => {
+        if (gen !== this.generation) return;
+        if (!allowed) {
+          if (branch.else) this.run(branch.else, childScope(scope, { error: "Not allowed" }));
+          else this.error(where, "Not allowed");
+          return;
+        }
+        const call = this.host.call;
+        if (!call) return fail(`The host has no '${name}' service`);
+        // Book actions run in core over `zip.read`, with the app's identity injected.
+        if (BOOK_ACTIONS.has(name)) return this.runBookAction(name, args, scope, branch, where, gen);
+        // File actions carry the app for the host's per-app store; apps never pass it.
+        // `readFile`/`deleteFile` are the app's names for the `files.read`/`files.delete` services.
+        let service = name;
+        let hostArgs = args;
+        if (FILE_ACTIONS.has(name)) {
+          if (name === "readFile" || name === "deleteFile") {
+            service = name === "readFile" ? "files.read" : "files.delete";
+            const id = fileIdOf((args as Record<string, unknown>).file);
+            if (!id) return fail("No file");
+            hostArgs = { app: spec.id, id, ...(name === "readFile" ? { as: (args as Record<string, unknown>).as ?? "text" } : {}) };
+          } else if (name === "share") {
+            hostArgs = { ...args, app: spec.id };
+            const id = fileIdOf((args as Record<string, unknown>).file);
+            if (id) hostArgs.file = id;
+            else delete (hostArgs as Record<string, unknown>).file;
+          } else {
+            hostArgs = { ...args, app: spec.id };
+          }
+        }
+        if (name === "keepAwake") {
+          if (args.on) this.deviceCleanup.set(name, { on: false }); else this.deviceCleanup.delete(name);
+        }
+        if (name === "brightness") {
+          if (args.level != null) this.deviceCleanup.set(name, { level: null }); else this.deviceCleanup.delete(name);
+        }
+        if (name === "speak") this.deviceCleanup.set("stopSpeaking", {});
+        if (name === "stopSpeaking") this.deviceCleanup.delete(name);
+        let answered = false;
+        call.call(this.host, service, hostArgs, (result, error) => {
+          if (answered) return;
+          answered = true;
+          if (gen !== this.generation) return;
+          if (error) {
+            if (branch.else) this.run(branch.else, childScope(scope, { error }));
+            else this.error(where, error);
+          } else if (branch.then) {
+            // `files.read` answers `{data}`; the app's `readFile` wants the text or base64 itself.
+            const value = name === "readFile" && result && typeof result === "object" && "data" in (result as Record<string, unknown>)
+              ? (result as Record<string, unknown>).data
+              : result;
+            this.run(branch.then, childScope(scope, { value }));
+          }
+        });
+      })
+      .catch((e) => fail((e as Error).message));
+  }
+
+  /**
+   * Book actions (Phase F) run in core over the host's `zip.read`: `openBook {file}`
+   * opens the EPUB, `readChapter {file, href}` reads one chapter as blocks, and
+   * `bookImage {file, src}` reads an image as a `data:` URL. The app's identity is
+   * injected here; whatever the caller passed as `app` is ignored, so an app only
+   * ever reads its own files.
+   */
+  private runBookAction(
+    name: string,
+    args: Record<string, unknown>,
+    scope: Scope,
+    branch: { then?: Actions; else?: Actions },
+    where: string,
+    gen: number,
+  ): void {
+    const fail = (message: string) => {
+      if (gen !== this.generation) return;
+      this.error(where, message);
+      if (branch.else) this.run(branch.else, childScope(scope, { error: message }));
+    };
+    const file = args.file;
+    const id = typeof file === "string" ? file : (file as { id?: unknown } | null)?.id;
+    if (typeof id !== "string" || !id) {
+      fail("needs a file from pickFile");
+      return;
+    }
+    const zip: ZipSource = {
+      readText: (path) => this.zipRead(id, path, "text"),
+      readBase64: (path) => this.zipRead(id, path, "base64"),
+    };
+    const done = (value: unknown) => {
+      if (gen !== this.generation) return;
+      if (branch.then) this.run(branch.then, childScope(scope, { value }));
+    };
+    try {
+      if (name === "openBook") openEpub(zip).then(done, (e) => fail(messageOf(e)));
+      else if (name === "readChapter") readEpubChapter(zip, String(args.href ?? "")).then(done, (e) => fail(messageOf(e)));
+      else readEpubImage(zip, String(args.src ?? "")).then(done, (e) => fail(messageOf(e)));
+    } catch (e) {
+      fail(messageOf(e));
+    }
+  }
+
+  /** One `zip.read` through the host, for this app's file only. */
+  private zipRead(id: string, path: string, as: "text" | "base64"): Promise<string> {
+    const call = this.host.call;
+    if (!call) return Promise.reject(new Error("The host has no 'zip.read' service"));
+    return new Promise((resolve, reject) => {
+      try {
+        call.call(this.host, "zip.read", { app: this.spec.id, id, path, as }, (result, error) => {
+          if (error) reject(new Error(error));
+          else if (!result || typeof (result as { data?: unknown }).data !== "string") reject(new Error("Bad 'zip.read' answer"));
+          else resolve((result as { data: string }).data);
+        });
+      } catch (e) {
+        reject(e);
+      }
+    });
+  }
+
+  /** An action value is an expression string, or an object whose values are expressions. `now()` here is a timestamp, not a live value. */
   private evalValue(v: unknown, scope: Scope, where: string): unknown {
-    if (typeof v === "string") return this.evalExpr(v, scope, where);
+    if (typeof v === "string") return this.evalAction(v, scope, where);
     if (v && typeof v === "object" && !Array.isArray(v)) {
       const out: Record<string, unknown> = {};
       for (const [k, x] of Object.entries(v)) out[k] = this.evalValue(x, scope, where);
       return out;
     }
     return v;
+  }
+
+  /** An action condition or value: compiled without subscribing to live values. */
+  private evalAction(src: string, scope: Scope, where: string): unknown {
+    let fn: Compiled;
+    try {
+      fn = compile(src);
+    } catch (e) {
+      this.error(where, (e as Error).message);
+      return undefined;
+    }
+    try {
+      return fn(scope);
+    } catch (e) {
+      this.error(where, (e as Error).message);
+      return undefined;
+    }
   }
 
   private readPath(path: string, scope: Scope): unknown {
@@ -1574,6 +2034,121 @@ const PRIMITIVES = new Set(["root", "screen", ...Object.keys(NODE_TYPES)]);
 const isPrimitive = (t: string) => PRIMITIVES.has(t);
 export const PRIMITIVE_TYPES = [...PRIMITIVES].filter((t) => t !== "root" && t !== "screen");
 
+// ---------- Live values ----------
+
+/**
+ * Sources that feed live values. Each starts the first time its value is read and stops with
+ * the app. Location and heading stream from the host's watch services through `pushLive`.
+ */
+const LIVE: Record<string, (rt: Runtime) => () => void> = {
+  clock: (rt) => startClock(rt),
+  location: (rt) => startLocation(rt),
+  heading: (rt) => startHeading(rt),
+};
+
+/** The clock: epoch milliseconds, reticking at each whole second while it is read. */
+function startClock(rt: Runtime): () => void {
+  let stopped = false;
+  let last = Math.floor(effectiveNow() / 1000);
+  const tick = () => {
+    if (stopped) return;
+    last = Math.floor(effectiveNow() / 1000);
+    rt.pushLive("clock", effectiveNow());
+    schedule();
+  };
+  const poll = () => {
+    if (stopped) return;
+    const second = Math.floor(effectiveNow() / 1000);
+    if (second !== last) {
+      last = second;
+      rt.pushLive("clock", effectiveNow());
+    }
+    rt.host.requestFrame(poll);
+  };
+  const schedule = () => {
+    if (stopped) return;
+    if (rt.host.after) {
+      let delay = 1000 - (effectiveNow() % 1000);
+      if (delay <= 0) delay += 1000;
+      rt.host.after(delay, tick);
+    } else rt.host.requestFrame(poll);
+  };
+  schedule();
+  return () => {
+    stopped = true;
+  };
+}
+
+/**
+ * `location`: {lat, lon, accuracy} or null until the first fix. Asks through the gate;
+ * a denial never subscribes and leaves it null with one error. Allowed apps share the
+ * top-level runtime's host watch; the last unsubscribe stops it. A watch error keeps
+ * the last value and is recorded once.
+ */
+function startLocation(rt: Runtime): () => void {
+  let stopped = false;
+  let unsub: (() => void) | null = null;
+  const fail = (message: string) => {
+    if (stopped) return;
+    rt.recordError("location", message);
+  };
+  const spec = rt.spec;
+  void Promise.resolve()
+    .then(() => {
+      if (stopped) return false;
+      if (CAPABILITIES["location"]?.asks === false || !rt.gate) return true;
+      return rt.gate(spec, "location");
+    })
+    .then((allowed) => {
+      if (stopped) return;
+      if (!allowed) {
+        fail("Location isn't allowed");
+        return;
+      }
+      unsub = rt.subscribeLocation(
+        (update) => {
+          if (stopped) return;
+          if (update && typeof update === "object") rt.pushLive("location", update);
+        },
+        (message) => fail(message),
+      );
+    })
+    .catch((e) => fail((e as Error).message));
+  return () => {
+    stopped = true;
+    try {
+      unsub?.();
+    } catch {
+      // Stopping never fails the app.
+    }
+    unsub = null;
+  };
+}
+
+/** `heading`: {degrees, accuracy} or null. Shares the top-level runtime's host watch; needs no gate. */
+function startHeading(rt: Runtime): () => void {
+  let stopped = false;
+  const fail = (message: string) => {
+    if (stopped) return;
+    rt.recordError("heading", message);
+  };
+  const unsub = rt.subscribeHeading(
+    (update) => {
+      if (stopped) return;
+      if (update && typeof update === "object") rt.pushLive("heading", update);
+    },
+    (message) => fail(message),
+  );
+  return () => {
+    stopped = true;
+    try {
+      unsub();
+    } catch {
+      // Stopping never fails the app.
+    }
+  };
+}
+
 function emptyStats(): FrameStats {
   return { bindingsMs: 0, layoutMs: 0, measureMs: 0, measureCalls: 0, measureCacheHits: 0, layoutCacheHits: 0, skippedSubtrees: 0, applyMs: 0, ops: 0 };
 }
@@ -1609,6 +2184,45 @@ function toPointer(path: string): string {
 
 function hasRemove(actions: Actions | undefined): boolean {
   return (Array.isArray(actions) ? actions : actions ? [actions] : []).some((a) => "remove" in a);
+}
+
+/** Async actions handled in core (over `zip.read`) rather than on the host. */
+const BOOK_ACTIONS = new Set(["openBook", "readChapter", "bookImage"]);
+
+/**
+ * A text node's `spans` prop as concatenated text plus UTF-16 ranges for the runs
+ * that change measurement (bold, italic), or null when `value` applies instead.
+ */
+function textSpans(v: unknown): { text: string; ranges: TextSpanStyle[] } | null {
+  if (!Array.isArray(v) || !v.length) return null;
+  let text = "";
+  const ranges: TextSpanStyle[] = [];
+  for (const s of v) {
+    if (!s || typeof s !== "object" || Array.isArray(s)) continue;
+    const span = s as { text?: unknown; bold?: unknown; italic?: unknown };
+    const start = text.length;
+    text += typeof span.text === "string" ? span.text : str(span.text ?? "");
+    if (text.length > start && (span.bold === true || span.italic === true)) {
+      ranges.push({ start, end: text.length, bold: span.bold === true, italic: span.italic === true });
+    }
+  }
+  return text ? { text, ranges } : null;
+}
+
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Async actions that carry the app's id to the host's per-app file store. */
+const FILE_ACTIONS = new Set(["pickFile", "pickPhoto", "takePhoto", "share", "readFile", "deleteFile"]);
+
+/** A file handle's id, whether passed as a handle `{id}` or a bare id string. */
+function fileIdOf(file: unknown): string | null {
+  if (typeof file === "string") return file || null;
+  if (file && typeof file === "object" && typeof (file as Record<string, unknown>).id === "string") {
+    return ((file as Record<string, unknown>).id as string) || null;
+  }
+  return null;
 }
 
 function fontWeightOf(v: unknown): number | undefined {

@@ -2,7 +2,7 @@
 // it can't drift from what actually renders. The tools carry the same format as JSON Schema.
 import { SHAPES } from "../builtins.ts";
 import { BUILTINS } from "../expr.ts";
-import { DEFAULT_THEME, NODE_TYPES, STYLE_KEYS } from "../spec.ts";
+import { ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, NODE_TYPES, STYLE_KEYS } from "../spec.ts";
 
 /** One line per node type with the props it takes, e.g. `- button {label, variant: primary|...}: a button`. */
 function nodeTypes(): string {
@@ -16,13 +16,26 @@ function nodeTypes(): string {
     .join("\n");
 }
 
+/** Capabilities, live values and async actions, one line each, from the format tables. */
+function capabilities(): string {
+  const lines = Object.entries(CAPABILITIES).map(([name, info]) => `- ${name}: ${info.doc}${info.asks ? "" : " (no permission prompt)"}. A live value: read it in an expression ({{${name}}}); only the bindings that read it update as it changes.`);
+  lines.push(`Async actions run later: {"<name>": {args}, "then": actions, "else": actions}. "then" runs with the result as \`value\`; "else" with the failure as \`error\`.`);
+  for (const [name, info] of Object.entries(ASYNC_ACTIONS)) {
+    const args = Object.entries(info.args)
+      .map(([k, v]) => (Array.isArray(v) ? `${k}: ${v.join("|")}` : `${k}: ${v}`))
+      .join(", ");
+    lines.push(`- ${name} {${args}}: ${info.doc}, needs "${info.capability}". Returns: ${info.result}.`);
+  }
+  return lines.join("\n");
+}
+
 export function systemPrompt(): string {
   return `You build and edit small personal apps for Jig. An app is a JSON spec, never code: the container renders it with native components on iOS, Android and the web. You change an app only through the tools; the user sees each change live.
 
 # Spec format
 
 {"id": "kebab-id", "name": "Shown name", "description": "One line", "theme": {"accent": "#hex"},
- "data": {key: {"type": "string|number|boolean|date|datetime|list|object", "default": ..., "fields": {...}, "secret": true?}},
+ "data": {key: {"type": "string|number|boolean|date|datetime|list|object|file", "default": ..., "fields": {...}, "secret": true?}},
  "state": {key: defaultValue},
  "screens": {name: {"title": "...", "scroll": true, "body": node, "footer": node?}},
  "start": "screenName", "components": {Name: node}}
@@ -51,6 +64,26 @@ Scope: data and state keys, the "as" variable inside each/list rows, "params" (t
 ## Actions (onTap, onChange, onSubmit, swipe do), one or an array run in order
 {"set": "path", "to": expr} · {"toggle": "path"} · {"push": "listKey", "value": {field: expr}} · {"remove": "item"} (inside a list row or each) · {"remove": "listKey", "where": "expr on item"} · {"navigate": "screen", "params": {k: expr}} · {"back": true} · {"if": expr, "then": actions, "else": actions}
 Paths may go into a row's item: {"toggle": "chore.done"}.
+
+## Media
+Use audio with src "@chime", "@gentle", or "@alarm" for bundled sounds, or an https URL. Bind playing to a boolean state, toggle it from a button, and reset it in onEnded. onTime gets value = {position, duration} in seconds. Audio has no visible size; give video an aspectRatio and controls. Async action argument strings are expressions: quote literal text inside the expression.
+
+## Books
+An EPUB reader: pickFile {accept: ["epub"]} imports a book file, then openBook {file} returns {title, author, chapters: [{title, href}]} in reading order. readChapter {file, href} returns the chapter as blocks [{kind, spans, src}] (h1, h2, h3, p, quote, li, hr, image); show them as a list of text rows with spans (headings bigger, links run onLink), with previous/next buttons and the chapter list. bookImage {file, src} returns a data: URL for an image block. Remember each book's current chapter in data.
+## Files
+A file field holds a handle {id, name, type, size} (or null); a list's items may have file fields (e.g. books: {title, file}). An image, video or audio src can be a file handle: the runtime turns {id} into jig-file:<app>/<id> before the host sees it. To pick a photo into a list: {"pickPhoto": {}, "then": {"push": "photos", "value": {"id": "uid()", "file": "value"}}}.
+
+## Capabilities
+An app declares what of the container it uses: "capabilities": ["clock"]. Reading a live value or running an async action without declaring its capability is rejected.
+${capabilities()}
+- Sun: with location, sunTimes(location.lat, location.lon, today()) gives today's sunrise and sunset there, and sunPosition(location.lat, location.lon, now()) the sun's place now; read them only once location isn't null.
+
+## Widgets
+Home-screen widgets show the app's own data on the user's own home screen: no capability, no permission prompt.
+{"widgets": {"today": {"title": "Chores today", "sizes": ["small", "medium"], "body": {"type": "column", "children": [...]}, "open": "main"}}}
+- body is an ordinary node tree with the app's data and state (at defaults) in scope, plus widget = {size, width, height}. open is the screen a tap opens (default the start screen).
+- Sizes in points: small 158x158, medium 338x158, large 338x354. A widget that reads clock or now() gets a timeline (one entry now, then one per minute for 30 minutes).
+- onTap inside a widget is ignored: a tap opens the app at open. Buttons that run actions come later.
 
 # How to work
 - Make the smallest change that does what the user asked; keep their data keys, so saved data survives the edit.

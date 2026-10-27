@@ -28,7 +28,7 @@ test("typos and invented props are caught, with what was meant", () => {
   assert.match(errors, /children\[0\]\.style: unknown style key 'colour'; did you mean 'color'\?/);
   assert.match(errors, /children\[0\]\.style\.width: expected a number, "50%" or "fill", or a \{\{binding\}\}, not "big"/);
   assert.match(errors, /children\[1\]: button has no 'labels'; did you mean 'label'\?/);
-  assert.match(errors, /children\[2\]: text has no 'children' \(it takes value, variant\)/);
+  assert.match(errors, /children\[2\]: text has no 'children' \(it takes value, variant, spans, onLink\)/);
   assert.match(errors, /children\[3\]\.onChange: unknown action \{"goto":"main"\}/);
   assert.match(errors, /children\[4\]\.onTap: 'to' is required/);
   assert.match(errors, /data\.n\.type: expected one of string, number/);
@@ -54,4 +54,10 @@ test("the model's tool schema resolves every reference and leaves aliases out", 
 test("a bare expression written as a binding works the same", () => {
   const spec = app({ type: "column", children: [{ type: "text", value: "shown", if: "{{!hidden}}" }, { type: "text", each: "{{range(2)}}", as: "i", value: "{{i}}" }] }, { state: { hidden: false } } as Partial<AppSpec>);
   assert.deepEqual(validateSpec(spec), []);
+});
+
+test("capabilities lists the table's names", () => {
+  assert.deepEqual(validateSpec(app({ type: "text", value: "hi" }, { capabilities: ["clock"] })), []);
+  assert.deepEqual(validateSpec(app({ type: "text", value: "hi" }, { capabilities: ["location", "heading"] })), []);
+  assert.match(validateSpec(app({ type: "text", value: "hi" }, { capabilities: ["teleport"] })).join("\n"), /expected one of .*not "teleport"/);
 });

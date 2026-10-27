@@ -29,7 +29,15 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     @MainActor
     init(renderer: UIKitRenderer) {
         let toggleSize = UISwitch().intrinsicContentSize
-        js.async { self.setUp(renderer: renderer, toggleSize: toggleSize) }
+        // A slider fills its width; only this height is used (160 is a nominal width, as for text fields).
+        let sliderHeight = UISlider().intrinsicContentSize.height
+        let sliderSize = CGSize(width: 160, height: sliderHeight > 0 ? sliderHeight : 31)
+        let picker = UIDatePicker()
+        picker.datePickerMode = .time
+        picker.preferredDatePickerStyle = .compact
+        let pickerRaw = picker.intrinsicContentSize
+        let timePickerSize = CGSize(width: pickerRaw.width > 0 ? pickerRaw.width : 96, height: pickerRaw.height > 0 ? pickerRaw.height : 34)
+        js.async { self.setUp(renderer: renderer, toggleSize: toggleSize, sliderSize: sliderSize, timePickerSize: timePickerSize) }
         renderer.dispatch = { [weak self] id, name, payload in self?.dispatch(id: id, name: name, payload: payload) }
     }
 
@@ -42,6 +50,8 @@ nonisolated final class JigRuntime: @unchecked Sendable {
             self.publishTheme()
         }
     }
+
+    func open(app: String, screen: String) { js.async { self.call("__jigOpen", app, screen) } }
 
     func setColorScheme(dark: Bool) {
         js.async {
@@ -68,14 +78,14 @@ nonisolated final class JigRuntime: @unchecked Sendable {
 
     // MARK: - Setup (JS queue)
 
-    private func setUp(renderer: UIKitRenderer, toggleSize: CGSize) {
+    private func setUp(renderer: UIKitRenderer, toggleSize: CGSize, sliderSize: CGSize, timePickerSize: CGSize) {
         guard let context = JSContext() else { fatalError("JavaScriptCore is unavailable") }
         self.context = context
         context.name = "Jig runtime"
         context.exceptionHandler = { _, exception in
             NSLog("[jig] JS exception: %@", exception?.toString() ?? "unknown")
         }
-        installNative(renderer: renderer, toggleSize: toggleSize)
+        installNative(renderer: renderer, toggleSize: toggleSize, sliderSize: sliderSize, timePickerSize: timePickerSize)
         guard let url = Bundle.main.url(forResource: "jig-core", withExtension: "js"),
               let source = try? String(contentsOf: url, encoding: .utf8)
         else {
@@ -106,7 +116,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         }
     }
 
-    private func installNative(renderer: UIKitRenderer, toggleSize: CGSize) {
+    private func installNative(renderer: UIKitRenderer, toggleSize: CGSize, sliderSize: CGSize, timePickerSize: CGSize) {
         let native = JSValue(newObjectIn: context)!
 
         let apply: @convention(block) (String) -> Void = { json in
@@ -114,12 +124,19 @@ nonisolated final class JigRuntime: @unchecked Sendable {
                 MainActor.assumeIsolated { renderer.apply(json: json) }
             }
         }
-        let measure: @convention(block) (String, Double, Double, Double, Double, String) -> [Double] = { text, size, weight, lineHeight, maxWidth, family in
-            let s = TextStyle.measure(text, size: size, weight: weight, lineHeight: lineHeight, maxWidth: maxWidth, mono: family == "mono")
+        let measure: @convention(block) (String, String, Double) -> [Double] = { text, styleJSON, maxWidth in
+            // The style travels as JSON so spans reach measurement too.
+            let style = (try? JSONSerialization.jsonObject(with: Data(styleJSON.utf8))) as? [String: Any] ?? [:]
+            let s = TextStyle.measure(text, style: style, maxWidth: maxWidth)
             return [Double(s.width), Double(s.height)]
         }
         let measureControl: @convention(block) (String) -> [Double] = { type in
-            type == "toggle" ? [Double(toggleSize.width), Double(toggleSize.height)] : [0, 0]
+            switch type {
+            case "toggle": [Double(toggleSize.width), Double(toggleSize.height)]
+            case "slider": [Double(sliderSize.width), Double(sliderSize.height)]
+            case "timePicker": [Double(timePickerSize.width), Double(timePickerSize.height)]
+            default: [0, 0]
+            }
         }
         let requestFrame: @convention(block) () -> Void = { [weak self] in
             DispatchQueue.main.async {
@@ -149,6 +166,10 @@ nonisolated final class JigRuntime: @unchecked Sendable {
             }
             Services.handle(service, argsJSON: args, done: resolve, progress: progress)
         }
+        // A timer for the runtime (the clock's ticks): JavaScriptCore has no setTimeout.
+        let after: @convention(block) (Double, Int) -> Void = { [weak self] ms, id in
+            self?.js.asyncAfter(deadline: .now() + ms / 1000) { self?.call("__jigTimer", id) }
+        }
         let now: @convention(block) () -> Double = { CACurrentMediaTime() * 1000 }
         let log: @convention(block) (String, String) -> Void = { level, message in NSLog("[jig] %@: %@", level, message) }
 
@@ -163,6 +184,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
         native.setObject(secretDelete, forKeyedSubscript: "secretDelete" as NSString)
         native.setObject(secretClear, forKeyedSubscript: "secretClear" as NSString)
         native.setObject(call, forKeyedSubscript: "call" as NSString)
+        native.setObject(after, forKeyedSubscript: "after" as NSString)
         native.setObject(now, forKeyedSubscript: "now" as NSString)
         native.setObject(log, forKeyedSubscript: "log" as NSString)
         context.setObject(native, forKeyedSubscript: "__native" as NSString)

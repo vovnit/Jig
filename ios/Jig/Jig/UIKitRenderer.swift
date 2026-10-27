@@ -1,3 +1,5 @@
+import AVFoundation
+import AVKit
 import UIKit
 
 /// The UIKit host: a "dumb" renderer that applies the runtime's ops. It creates
@@ -27,6 +29,19 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     private var nodes: [Int: Node] = [:]
+    /// Last value each slider reported (or was given): a release reporting the same one stays quiet.
+    private var sliderSent: [Int: Float] = [:]
+    /// Media players by node (video and audio nodes), with their source and observers.
+    private var players: [Int: AVPlayer] = [:]
+    private var mediaSources: [Int: String] = [:]
+    private var timeObservers: [Int: Any] = [:]
+    private var endObservers: [Int: NSObjectProtocol] = [:]
+    /// `controls` video: AVPlayerViewController hosted in the owning view controller,
+    /// or a minimal play/pause overlay where there is none.
+    private var playerControllers: [Int: AVPlayerViewController] = [:]
+    private var playOverlays: [Int: UIButton] = [:]
+    /// Nodes currently playing, for the shared `.playback` audio session.
+    private var mediaPlaying: Set<Int> = []
     /// Nodes created in the batch being applied: they appear without animating their frame.
     private var createdNow = Set<Int>()
     /// Removed views still fading out: they stay on screen but no longer count as children.
@@ -412,6 +427,9 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     private func forget(_ view: UIView) {
         if view.tag > 0, nodes[view.tag]?.view === view {
             nodes.removeValue(forKey: view.tag)
+            sliderSent.removeValue(forKey: view.tag)
+            releaseMedia(view.tag)
+            mediaSources.removeValue(forKey: view.tag)
             rows.forget(view.tag)
             depths.removeValue(forKey: view.tag)
             screenSnapshots.removeValue(forKey: view.tag)
@@ -427,7 +445,9 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     private func makeView(id: Int, type: String) -> UIView {
         switch type {
         case "text":
-            return JigTextView()
+            let label = JigTextView()
+            label.onLink = { [weak self] url in self?.dispatch?(id, "link", ["url": url]) }
+            return label
         case "button":
             let b = JigButton(type: .custom)
             b.titleLabel?.numberOfLines = 0
@@ -455,12 +475,41 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 self?.dispatch?(id, "change", ["value": s?.isOn ?? false])
             }, for: .valueChanged)
             return s
+        case "slider":
+            let slider = UISlider()
+            slider.addAction(UIAction { [weak self] _ in
+                // While dragging, the thumb moves itself; only an idle change reports.
+                guard let self, let node = self.nodes[id], (node.view as? UISlider)?.isTracking == false else { return }
+                self.sliderChanged(id: id)
+            }, for: .valueChanged)
+            slider.addAction(UIAction { [weak self] _ in
+                // The drag ended (a tap that moves the thumb ends here too).
+                self?.sliderChanged(id: id)
+            }, for: [.touchUpInside, .touchUpOutside, .touchCancel])
+            return slider
+        case "timePicker":
+            let picker = UIDatePicker()
+            picker.datePickerMode = .time
+            picker.preferredDatePickerStyle = .compact
+            picker.addAction(UIAction { [weak self, weak picker] _ in
+                guard let picker else { return }
+                self?.dispatch?(id, "change", ["value": Self.hhmm(picker.date)])
+            }, for: .valueChanged)
+            return picker
         case "shape":
             return JigShapeView()
         case "image":
             let v = UIImageView()
             v.contentMode = .scaleAspectFill
             v.clipsToBounds = true
+            return v
+        case "video":
+            return JigVideoView()
+        case "audio":
+            // No visible UI (0×0): the view only owns the player.
+            let v = UIView()
+            v.isHidden = true
+            v.isAccessibilityElement = false
             return v
         case "scroll", "hscroll", "canvas":
             let s = JigScrollView()
@@ -491,7 +540,21 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         case "text":
             guard let label = view as? JigTextView else { return }
             label.insets = insets(s["padding"])
-            let text = NSAttributedString(string: string(p["value"]), attributes: textAttributes(s))
+            // Spans win over the value; each run draws (and measures) with its own weight and slant.
+            let text: NSAttributedString
+            if let spans = p["spans"] as? [[String: Any]], !spans.isEmpty {
+                text = TextStyle.spanned(
+                    spans,
+                    size: double(s["fontSize"] ?? 17),
+                    weight: double(s["fontWeight"] ?? 400),
+                    lineHeight: double(s["lineHeight"] ?? 22),
+                    mono: s["fontFamily"] as? String == "mono",
+                    color: color(s["color"]) ?? .black,
+                    align: textAlign(s)
+                )
+            } else {
+                text = NSAttributedString(string: string(p["value"]), attributes: textAttributes(s))
+            }
             if let t, label.text != text {
                 UIView.transition(with: label, duration: t.duration, options: [.transitionCrossDissolve, .beginFromCurrentState]) { label.text = text }
             } else {
@@ -529,6 +592,27 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             toggle.onTintColor = accentColor
             let on = (p["value"] as? Bool) ?? false
             if toggle.isOn != on { toggle.setOn(on, animated: true) }
+        case "slider":
+            guard let slider = view as? UISlider else { return }
+            let min = Float(cgFloat(p["min"]) ?? 0)
+            var max = Float(cgFloat(p["max"]) ?? 1)
+            if !(max > min) { max = min + 1 }
+            slider.minimumValue = min
+            slider.maximumValue = max
+            let tint = color(p["tint"]) ?? accentColor
+            slider.minimumTrackTintColor = tint
+            slider.thumbTintColor = tint
+            let step = (p["step"] as? NSNumber).map { $0.floatValue }.flatMap { $0 > 0 ? $0 : nil }
+            let snapped = snapSlider(Float(double(p["value"] ?? 0)), min: min, max: max, step: step)
+            sliderSent[view.tag] = snapped
+            // A JS update waits while the user drags; the release reports the final value.
+            if !slider.isTracking, slider.value != snapped { slider.setValue(snapped, animated: true) }
+        case "timePicker":
+            guard let picker = view as? UIDatePicker else { return }
+            picker.tintColor = color(p["tint"]) ?? accentColor
+            if let date = Self.date(fromHHMM: string(p["value"])), Self.hhmm(picker.date) != Self.hhmm(date) {
+                picker.setDate(date, animated: true)
+            }
         case "shape":
             guard let shape = view as? JigShapeView else { return }
             shape.pathData = string(p["path"])
@@ -541,6 +625,10 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         case "image":
             guard let imageView = view as? UIImageView else { return }
             loadImage(string(p["src"]), into: imageView, id: view.tag)
+        case "video":
+            renderVideo(node)
+        case "audio":
+            renderAudio(node)
         case "scroll", "hscroll", "canvas":
             guard let scroll = view as? JigScrollView else { return }
             // A paging hscroll (the builder's screen pager) reports the page it settles on.
@@ -691,6 +779,8 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         var view = surface.hitTest(point, with: nil)
         if !(view is UITextField) { surface.endEditing(true) }
         while let v = view, v !== surface {
+            // A tap on a link sends `link` from the label itself, not a `tap`.
+            if let label = v as? JigTextView, label.url(at: v.convert(point, from: surface)) != nil { return }
             if v.tag > 0, let node = nodes[v.tag], node.view === v, node.props["tappable"] as? Bool == true {
                 UIView.animate(withDuration: 0.08, animations: { v.alpha = 0.6 }) { _ in
                     UIView.animate(withDuration: 0.15) { v.alpha = self.cgFloat(node.style["opacity"]) ?? 1 }
@@ -730,6 +820,11 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             view.image = image
             self.dispatch?(id, "load", ["width": Double(image.size.width), "height": Double(image.size.height)])
         }
+        if src.hasPrefix("jig-file:"), let (app, file) = fileParts(src), let url = FileStore.fileURL(app: app, id: file),
+           let image = UIImage(contentsOfFile: url.path) {
+            report(image)
+            return
+        }
         if let bundled = UIImage(named: src) {
             report(bundled)
             return
@@ -746,23 +841,261 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
+    // MARK: - Media (video and audio nodes)
+
+    private func renderVideo(_ node: Node) {
+        let id = node.view.tag
+        let p = node.props
+        let src = string(p["src"])
+        if mediaSources[id] != src {
+            releaseMedia(id)
+            mediaSources[id] = src
+            let player: AVPlayer
+            if src.hasPrefix("jig-file:"), let (app, file) = fileParts(src), let url = FileStore.fileURL(app: app, id: file) {
+                player = AVPlayer(url: url)
+            } else if let url = URL(string: src), url.scheme == "https" {
+                player = AVPlayer(url: url)
+            } else {
+                return
+            }
+            players[id] = player
+            observeMedia(id: id, player: player)
+        }
+        guard let player = players[id] else { return }
+        player.isMuted = p["muted"] as? Bool == true
+        if p["controls"] as? Bool == true {
+            showControls(id: id, player: player)
+        } else {
+            hideControls(id: id)
+            if let videoView = node.view as? JigVideoView {
+                videoView.player = player
+                videoView.gravity = (p["fit"] as? String) == "cover" ? .resizeAspectFill : .resizeAspect
+            }
+        }
+        setMediaPlaying(id: id, player: player, playing: p["playing"] as? Bool == true)
+    }
+
+    private func renderAudio(_ node: Node) {
+        let id = node.view.tag
+        let p = node.props
+        let src = string(p["src"])
+        if mediaSources[id] != src {
+            releaseMedia(id)
+            mediaSources[id] = src
+            let player: AVPlayer
+            if src.hasPrefix("@") {
+                guard let url = bundledSoundURL(String(src.dropFirst())) else { return }
+                player = AVPlayer(url: url)
+            } else if src.hasPrefix("jig-file:"), let (app, file) = fileParts(src), let url = FileStore.fileURL(app: app, id: file) {
+                player = AVPlayer(url: url)
+            } else {
+                guard let url = URL(string: src), url.scheme == "https" || url.scheme == "http" else { return }
+                player = AVPlayer(url: url)
+            }
+            players[id] = player
+            observeMedia(id: id, player: player)
+        }
+        guard let player = players[id] else { return }
+        let volume = Float(double(p["volume"] ?? 1))
+        player.volume = volume.isNaN ? 1 : min(1, max(0, volume))
+        setMediaPlaying(id: id, player: player, playing: p["playing"] as? Bool == true)
+    }
+
+    /// It plays while `playing` is true and pauses when it turns false.
+    private func setMediaPlaying(id: Int, player: AVPlayer, playing: Bool) {
+        if playing {
+            if player.rate == 0 {
+                if mediaPlaying.insert(id).inserted { MediaSession.started() }
+                player.play()
+            }
+        } else if mediaPlaying.contains(id) || player.rate != 0 {
+            player.pause()
+            if mediaPlaying.remove(id) != nil { MediaSession.stopped() }
+        }
+    }
+
+    /// The `time` event {position, duration} (seconds) about once a second, and `ended`.
+    private func observeMedia(id: Int, player: AVPlayer) {
+        let interval = CMTime(seconds: 1, preferredTimescale: 1)
+        timeObservers[id] = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self, weak player] _ in
+            guard let self, let player, self.players[id] === player else { return }
+            let position = player.currentTime().seconds
+            let total = player.currentItem?.duration.seconds ?? 0
+            self.dispatch?(id, "time", [
+                "position": position.isFinite ? position : 0,
+                "duration": total.isFinite ? total : 0,
+            ])
+            if let button = self.playOverlays[id] {
+                button.setTitle(player.rate > 0 ? "❚❚" : "▶", for: .normal)
+            }
+        }
+        endObservers[id] = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: player.currentItem, queue: .main
+        ) { [weak self, weak player] _ in
+            guard let self, let player, self.players[id] === player else { return }
+            if self.nodes[id]?.props["loop"] as? Bool == true {
+                player.seek(to: .zero)
+                player.play()
+            } else {
+                if self.mediaPlaying.remove(id) != nil { MediaSession.stopped() }
+                self.dispatch?(id, "ended", [:])
+            }
+        }
+    }
+
+    /// The platform's own play/pause/scrub controls: AVPlayerViewController hosted in
+    /// the owning view controller, or a minimal play/pause overlay where there is none.
+    private func showControls(id: Int, player: AVPlayer) {
+        guard let node = nodes[id] else { return }
+        let gravity: AVLayerVideoGravity = (node.props["fit"] as? String) == "cover" ? .resizeAspectFill : .resizeAspect
+        if let vc = playerControllers[id] {
+            if vc.player !== player { vc.player = player }
+            vc.videoGravity = gravity
+            return
+        }
+        (node.view as? JigVideoView)?.player = nil
+        guard let host = owningViewController(of: node.view) else {
+            showPlayOverlay(id: id, player: player)
+            return
+        }
+        hidePlayOverlay(id: id)
+        let vc = AVPlayerViewController()
+        vc.player = player
+        vc.videoGravity = gravity
+        vc.view.frame = node.view.bounds
+        vc.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        host.addChild(vc)
+        node.view.addSubview(vc.view)
+        vc.didMove(toParent: host)
+        playerControllers[id] = vc
+    }
+
+    private func hideControls(id: Int) {
+        if let vc = playerControllers.removeValue(forKey: id) {
+            vc.willMove(toParent: nil)
+            vc.view.removeFromSuperview()
+            vc.removeFromParent()
+        }
+        hidePlayOverlay(id: id)
+    }
+
+    private func showPlayOverlay(id: Int, player: AVPlayer) {
+        guard let node = nodes[id] else { return }
+        if let button = playOverlays[id] {
+            button.setTitle(player.rate > 0 ? "❚❚" : "▶", for: .normal)
+            return
+        }
+        if let videoView = node.view as? JigVideoView { videoView.player = player }
+        let button = UIButton(type: .system)
+        button.setTitle(player.rate > 0 ? "❚❚" : "▶", for: .normal)
+        button.titleLabel?.font = .systemFont(ofSize: 28)
+        button.tintColor = .white
+        button.backgroundColor = UIColor(white: 0, alpha: 0.4)
+        button.layer.cornerRadius = 28
+        button.frame = CGRect(x: 0, y: 0, width: 56, height: 56)
+        button.center = CGPoint(x: node.view.bounds.midX, y: node.view.bounds.midY)
+        button.autoresizingMask = [.flexibleLeftMargin, .flexibleRightMargin, .flexibleTopMargin, .flexibleBottomMargin]
+        button.addAction(UIAction { [weak self, weak player] _ in
+            guard let player else { return }
+            if player.rate > 0 {
+                player.pause()
+                if self?.mediaPlaying.remove(id) != nil { MediaSession.stopped() }
+            } else {
+                if self?.mediaPlaying.insert(id).inserted == true { MediaSession.started() }
+                player.play()
+            }
+            button.setTitle(player.rate > 0 ? "❚❚" : "▶", for: .normal)
+        }, for: .touchUpInside)
+        node.view.addSubview(button)
+        playOverlays[id] = button
+    }
+
+    private func hidePlayOverlay(id: Int) {
+        playOverlays.removeValue(forKey: id)?.removeFromSuperview()
+    }
+
+    private func owningViewController(of view: UIView) -> UIViewController? {
+        var responder: UIResponder? = view
+        while let next = responder?.next {
+            if let vc = next as? UIViewController { return vc }
+            responder = next
+        }
+        return nil
+    }
+
+    /// A bundled sound (`@chime`): the `sounds` subdirectory first, then none, since
+    /// the build may flatten it.
+    private func bundledSoundURL(_ name: String) -> URL? {
+        Bundle.main.url(forResource: name, withExtension: "wav", subdirectory: "sounds")
+            ?? Bundle.main.url(forResource: name, withExtension: "wav")
+    }
+
+    /// Stops the player and drops its observers (and any controls UI) for a removed
+    /// or re-sourced node.
+    private func releaseMedia(_ id: Int) {
+        if let player = players[id] {
+            player.pause()
+            if let observer = timeObservers[id] { player.removeTimeObserver(observer) }
+        }
+        players.removeValue(forKey: id)
+        timeObservers.removeValue(forKey: id)
+        if let observer = endObservers.removeValue(forKey: id) { NotificationCenter.default.removeObserver(observer) }
+        if mediaPlaying.remove(id) != nil { MediaSession.stopped() }
+        hideControls(id: id)
+    }
+
     // MARK: - Values
 
+    /// A slider's release: snaps the thumb onto the step and reports it, unless it didn't move.
+    private func sliderChanged(id: Int) {
+        guard let node = nodes[id], let slider = node.view as? UISlider else { return }
+        let min = slider.minimumValue
+        let maxValue = slider.maximumValue
+        let step = (node.props["step"] as? NSNumber).map { $0.floatValue }.flatMap { $0 > 0 ? $0 : nil }
+        let snapped = snapSlider(slider.value, min: min, max: maxValue, step: step)
+        if slider.value != snapped { slider.value = snapped }
+        if let last = sliderSent[id], abs(last - snapped) < max(maxValue - min, 1) * 1e-6 { return }
+        sliderSent[id] = snapped
+        dispatch?(id, "change", ["value": Double(snapped)])
+    }
+
+    private func snapSlider(_ value: Float, min: Float, max: Float, step: Float?) -> Float {
+        let clamped = Swift.min(Swift.max(value, min), max)
+        guard let step, step > 0 else { return clamped }
+        return Swift.min(Swift.max(min + ((clamped - min) / step).rounded() * step, min), max)
+    }
+
+    private static func hhmm(_ date: Date) -> String {
+        let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+    }
+
+    private static func date(fromHHMM value: String) -> Date? {
+        let parts = value.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]),
+              (0 ..< 24).contains(h), (0 ..< 60).contains(m)
+        else { return nil }
+        return Calendar.current.date(bySettingHour: h, minute: m, second: 0, of: Date())
+    }
+
     private func textAttributes(_ s: [String: Any], defaultAlign: NSTextAlignment = .natural) -> [NSAttributedString.Key: Any] {
-        let align: NSTextAlignment = switch s["textAlign"] as? String {
-        case "center": .center
-        case "right", "end": .right
-        case "left", "start": .left
-        default: defaultAlign
-        }
         return TextStyle.attributes(
             size: double(s["fontSize"] ?? 17),
             weight: double(s["fontWeight"] ?? 400),
             lineHeight: double(s["lineHeight"] ?? 22),
             mono: s["fontFamily"] as? String == "mono",
             color: color(s["color"]) ?? .black,
-            align: align
+            align: textAlign(s, default: defaultAlign)
         )
+    }
+
+    private func textAlign(_ s: [String: Any], default defaultAlign: NSTextAlignment = .natural) -> NSTextAlignment {
+        switch s["textAlign"] as? String {
+        case "center": .center
+        case "right", "end": .right
+        case "left", "start": .left
+        default: defaultAlign
+        }
     }
 
     private func insets(_ v: Any?) -> UIEdgeInsets {
@@ -778,7 +1111,39 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
 
     private func color(_ v: Any?) -> UIColor? { (v as? String).flatMap { UIColor(hex: $0) } }
     private func string(_ v: Any?) -> String { v.map { $0 is NSNull ? "" : "\($0)" } ?? "" }
+    /// A `jig-file:<app>/<id>` source, from the app's file store.
+    private func fileParts(_ src: String) -> (String, String)? {
+        let rest = src.dropFirst("jig-file:".count)
+        guard let slash = rest.firstIndex(of: "/") else { return nil }
+        return (String(rest[..<slash]), String(rest[rest.index(after: slash)...]))
+    }
     private func int(_ v: Any) -> Int? { (v as? NSNumber)?.intValue }
     private func double(_ v: Any) -> Double { (v as? NSNumber)?.doubleValue ?? Double("\(v)") ?? 0 }
     private func cgFloat(_ v: Any?) -> CGFloat? { v.flatMap { ($0 as? NSNumber).map { CGFloat($0.doubleValue) } } }
+}
+
+/// The shared audio session: `.playback` while anything plays, so a sound plays
+/// with the silent switch on, restored afterwards.
+private enum MediaSession {
+    private static var count = 0
+    private static var previous: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
+    static func started() {
+        if count == 0 {
+            let session = AVAudioSession.sharedInstance()
+            previous = (session.category, session.mode, session.categoryOptions)
+            try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try? AVAudioSession.sharedInstance().setActive(true)
+        }
+        count += 1
+    }
+    static func stopped() {
+        count = max(0, count - 1)
+        if count == 0 {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            if let (category, mode, options) = previous {
+                try? AVAudioSession.sharedInstance().setCategory(category, mode: mode, options: options)
+                previous = nil
+            }
+        }
+    }
 }

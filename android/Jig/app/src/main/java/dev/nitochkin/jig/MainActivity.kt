@@ -58,6 +58,12 @@ class MainActivity : ComponentActivity() {
         permissionAnswer = null
     }
 
+    private var fileAnswer: ((Int, android.content.Intent?) -> Unit)? = null
+    private val files = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()) { result ->
+        fileAnswer?.invoke(result.resultCode, result.data)
+        fileAnswer = null
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // The builder's voice input asks for the microphone when first used.
@@ -70,6 +76,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        // Pickers, the camera and the share sheet go through the activity's result APIs the same way.
+        Services.startActivity = { intent, answer ->
+            runOnUiThread {
+                fileAnswer = answer
+                runCatching { files.launch(intent) }.onFailure {
+                    fileAnswer = null
+                    answer(RESULT_CANCELED, null)
+                }
+            }
+        }
+        Services.appContext = applicationContext
+        Services.activity = this
         enableEdgeToEdge()
         surface = JigLayout(this)
         setContentView(surface)
@@ -94,6 +112,20 @@ class MainActivity : ComponentActivity() {
         runtime.setColorScheme(isNight(resources.configuration))
         val (shell, seeds) = bundledSpecs()
         runtime.boot(shell, seeds)
+        openFromIntent(intent)
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openFromIntent(intent)
+    }
+    private fun openFromIntent(intent: android.content.Intent) {
+        // Notifications use jigApp/jigScreen; home-screen widgets use app/open.
+        val app = intent.getStringExtra("jigApp") ?: intent.getStringExtra("app") ?: return
+        runtime.open(app, intent.getStringExtra("jigScreen") ?: intent.getStringExtra("open") ?: "")
+        intent.removeExtra("jigApp")
+        intent.removeExtra("app")
     }
 
     override fun onConfigurationChanged(newConfig: Configuration) {
@@ -102,6 +134,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        Services.activity = null
         runtime.destroy()
         super.onDestroy()
     }

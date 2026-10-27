@@ -14,6 +14,7 @@ import android.animation.ValueAnimator
 import androidx.core.animation.doOnEnd
 import android.graphics.RectF
 import android.text.Layout
+import android.text.Spanned
 import android.text.StaticLayout
 import android.text.TextPaint
 import android.view.MotionEvent
@@ -273,6 +274,9 @@ class JigCanvasView(context: Context) : FrameLayout(context) {
     }
 }
 
+/** One styled run of a `text` node: UTF-16 offsets into its concatenated text. */
+data class NodeSpan(val start: Int, val end: Int, val bold: Boolean, val italic: Boolean, val color: Int?, val link: String?)
+
 /**
  * Text drawn with the same StaticLayout the runtime measures with
  * (`TextStyle.measure`), so wrapping always matches the measured height.
@@ -285,16 +289,29 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
 
     var text = ""
         private set
+    /** Styled runs ({text, bold, italic, color, link}); empty for plain text. */
+    private var spans: List<NodeSpan> = emptyList()
+    /** A tap on a link sends `link` {url} instead of `tap`; the runtime decides. */
+    var onLink: ((String) -> Unit)? = null
     /** The previous text while it cross-fades out (value transitions). */
     private var fading: StaticLayout? = null
     private var fade = 1f
     private var fadeAnimator: ValueAnimator? = null
 
     fun setText(value: String, crossfade: Long = 0) {
-        if (text == value) return
+        setContent(value, emptyList(), crossfade)
+    }
+
+    fun setSpans(value: String, spans: List<NodeSpan>, crossfade: Long = 0) {
+        setContent(value, spans, crossfade)
+    }
+
+    private fun setContent(value: String, spans: List<NodeSpan>, crossfade: Long) {
+        if (text == value && this.spans == spans) return
         fadeAnimator?.cancel()
         fading = if (crossfade > 0) layout else null
         text = value
+        this.spans = spans
         invalidateLayout()
         if (fading != null) {
             fadeAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -353,10 +370,7 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
             fading?.let { drawLayout(canvas, it) }
             return
         }
-        val l = layout ?: run {
-            TextStyle.configure(paint, fontSize, fontWeight, d, mono)
-            TextStyle.layout(text, paint, (lineHeight * d).roundToInt(), width, align).also { layout = it }
-        }
+        val l = layout ?: buildLayout(width).also { layout = it }
         val color = paint.color
         fading?.let {
             paint.alpha = ((1 - fade) * Color.alpha(color)).toInt()
@@ -374,6 +388,68 @@ class JigTextView(context: Context, private val isButton: Boolean) : View(contex
         canvas.translate(paddingLeft.toFloat(), paddingTop + if (isButton) free / 2f else 0f)
         l.draw(canvas)
         canvas.restore()
+    }
+
+    /** The same layout measurement uses, with this node's spans applied. */
+    private fun buildLayout(width: Int): StaticLayout {
+        val d = resources.displayMetrics.density
+        TextStyle.configure(paint, fontSize, fontWeight, d, mono)
+        return TextStyle.layout(content(), paint, (lineHeight * d).roundToInt(), width, align)
+    }
+
+    /** The text with its bold/italic runs and span colors, like the measured string. */
+    private fun content(): CharSequence {
+        if (spans.isEmpty()) return text
+        val content = TextStyle.spanned(text, spans.map { TextStyle.SpanRun(it.start, it.end, it.bold, it.italic) })
+        for (s in spans) {
+            val color = s.color ?: continue
+            content.setSpan(
+                android.text.style.ForegroundColorSpan(color),
+                s.start.coerceIn(0, text.length),
+                s.end.coerceIn(0, text.length),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
+            )
+        }
+        return content
+    }
+
+    private var downUrl: String? = null
+
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val link = onLink
+        if (link == null || spans.none { it.link != null }) return super.onTouchEvent(event)
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                downUrl = urlAt(event.x, event.y)
+                if (downUrl != null) return true
+            }
+            MotionEvent.ACTION_UP -> {
+                val up = urlAt(event.x, event.y)
+                val tapped = if (up != null && up == downUrl) up else null
+                downUrl = null
+                if (tapped != null) {
+                    link(tapped)
+                    return true
+                }
+                // The gesture was claimed on the way down; keep it.
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> downUrl = null
+        }
+        return super.onTouchEvent(event)
+    }
+
+    /** The linked URL under the touch point, if it hit a link's characters. */
+    private fun urlAt(x: Float, y: Float): String? {
+        val d = resources.displayMetrics.density
+        val width = width - paddingLeft - paddingRight + d.roundToInt()
+        if (width <= 0 || text.isEmpty()) return null
+        val l = layout ?: buildLayout(width).also { layout = it }
+        val line = l.getLineForVertical((y - paddingTop).toInt().coerceAtLeast(0))
+        if (line >= l.lineCount) return null
+        val off = l.getOffsetForHorizontal(line, (x - paddingLeft).coerceAtLeast(0f))
+        return spans.firstOrNull { it.link != null && off in it.start until it.end }?.link
     }
 
     override fun onInitializeAccessibilityNodeInfo(info: AccessibilityNodeInfo) {

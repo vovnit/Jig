@@ -8,6 +8,26 @@
     "log": { "type": "list", "fields": { "day": "date", "glasses": "number" }, "default": [] }
   },
   "state": {},
+  "widgets": {
+    "today": {
+      "title": "Water today",
+      "sizes": ["small"],
+      "body": {
+        "type": "column",
+        "style": { "align": "center", "justify": "center", "gap": 4, "padding": 12, "height": "100%" },
+        "children": [
+          {
+            "type": "ring",
+            "size": 96,
+            "value": "{{(find(log, d => d.day == today()).glasses ?? 0) / goal}}",
+            "label": "{{find(log, d => d.day == today()).glasses ?? 0}} / {{goal}}",
+            "caption": "glasses today"
+          }
+        ]
+      },
+      "open": "main"
+    }
+  },
   "screens": {
     "main": {
       "title": "Water",

@@ -16,6 +16,16 @@
     "taken": { "type": "list", "fields": { "med": "string", "day": "date", "at": "datetime" }, "default": [] }
   },
   "state": { "name": "", "dose": "", "time": "08:00" },
+  "capabilities": ["clock", "notifications"],
+  "schedule": {
+    "morning": {
+      "at": "09:00",
+      "title": "Time for your medicines",
+      "body": "{{len(meds) - count(meds, m => some(taken, t => t.med == m.id && t.day == today()))}} of {{len(meds)}} doses still to take",
+      "if": "count(meds, m => some(taken, t => t.med == m.id && t.day == today())) < len(meds)",
+      "open": "today"
+    }
+  },
   "screens": {
     "today": {
       "title": "Today",

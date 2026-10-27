@@ -1,14 +1,15 @@
 import "./style.css";
-import { type AppSpec, type FrameStats, type Op, Runtime, installBuilder, runningApp, seedApps, updateApp } from "@jig/core";
+import { type AppSpec, type FrameStats, type Op, Runtime, openApp, installBuilder, runningApp, seedApps, updateApp } from "@jig/core";
 import { openDatabase } from "./db.ts";
 import { DomHost } from "./host.ts";
 import shell from "../../specs/shell.json";
 import water from "../../specs/water.json";
 import chores from "../../specs/chores.json";
 import meds from "../../specs/meds.json";
+import books from "../../specs/books.json";
 import showcase from "../../specs/showcase.json";
 
-const SEEDS = [chores, meds, showcase, water] as unknown as AppSpec[];
+const SEEDS = [chores, meds, showcase, water, books] as unknown as AppSpec[];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const surface = $<HTMLDivElement>("#surface");
@@ -137,3 +138,5 @@ runtime.onStats = (s: FrameStats) => {
 };
 
 showSpec();
+
+window.addEventListener("jig-open", ((event: CustomEvent<{app: string; screen: string}>) => openApp(runtime, event.detail.app, event.detail.screen)) as EventListener);

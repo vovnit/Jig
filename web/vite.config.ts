@@ -7,6 +7,8 @@ const key = loadEnv("development", fileURLToPath(new URL("..", import.meta.url))
 
 export default defineConfig({
   define: { __DEV_MODEL_KEY__: JSON.stringify(Boolean(key)) },
+  // Bundled sounds (`@chime` and the like) are served at /sounds/<name>.wav from the repo's assets folder.
+  publicDir: fileURLToPath(new URL("../assets", import.meta.url)),
   // sqlite-wasm loads its .wasm next to its own module, which prebundling would break.
   optimizeDeps: { exclude: ["@sqlite.org/sqlite-wasm"] },
   // The browser would need CORS headers from the Meta Model API; the playground goes through the dev server instead.

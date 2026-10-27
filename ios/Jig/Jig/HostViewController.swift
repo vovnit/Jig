@@ -14,6 +14,7 @@ final class HostViewController: UIViewController {
         view.backgroundColor = .systemBackground
         renderer = UIKitRenderer(surface: view)
         runtime = JigRuntime(renderer: renderer)
+        FileService.presenter = self
         runtime.onTheme = { [weak self] theme in self?.apply(theme) }
         setUpBackSwipe()
         NotificationCenter.default.addObserver(
@@ -29,6 +30,7 @@ final class HostViewController: UIViewController {
 
         let (shell, seeds) = Self.bundledSpecs()
         runtime.boot(shellJSON: shell, seedsJSON: seeds)
+        ScheduleService.shared.onOpen = { [weak self] app, screen in self?.runtime.open(app: app, screen: screen) }
     }
 
     override func viewDidLayoutSubviews() {

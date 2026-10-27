@@ -5,7 +5,7 @@
 
 import { BUILTIN_COMPONENTS, TYPE_ALIASES } from "./builtins.ts";
 import { ALIGN_ALIASES, JUSTIFY_ALIASES } from "./layout.ts";
-import { ACTION_KINDS, COMMON_PROPS, FIELD_TYPES, NODE_TYPES, type NodeSpec, STYLE_KEYS, type ValueKind } from "./spec.ts";
+import { ACTION_KINDS, ASYNC_ACTIONS, CAPABILITIES, COMMON_PROPS, FIELD_TYPES, NODE_TYPES, WIDGET_SIZES, type NodeSpec, STYLE_KEYS, type ValueKind } from "./spec.ts";
 
 export interface Schema {
   type?: string | string[];
@@ -48,6 +48,25 @@ function kindSchema(k: ValueKind): Schema {
   switch (k) {
     case "text": return { type: ["string", "number", "boolean"], description: "text" };
     case "string": return { type: "string" };
+    case "fileSrc":
+      return {
+        anyOf: [
+          { type: "string", description: "an https or data URL, or a {{binding}} to a file handle" },
+          {
+            type: "object",
+            title: "file handle",
+            properties: {
+              id: { type: "string" },
+              name: { type: "string" },
+              type: { type: "string" },
+              size: { type: "number" },
+            },
+            required: ["id"],
+          },
+        ],
+        description: "an https or data URL, or a file handle",
+      };
+    case "nullableNumber": return bound({ type: ["number", "null"] }, "a number or null");
     case "number": return bound({ type: "number" }, "a number");
     case "boolean": return bound({ type: "boolean" }, "true or false");
     case "color": return { type: "string", description: "a theme token or #hex" };
@@ -59,6 +78,25 @@ function kindSchema(k: ValueKind): Schema {
     case "node": return ref("node");
     case "style": return ref("style");
     case "nodeOrText": return { anyOf: [{ type: "string" }, ref("node")], description: "text or a node" };
+    case "spans":
+      return bound(
+        {
+          type: "array",
+          items: {
+            type: "object",
+            title: "span",
+            properties: {
+              text: { type: ["string", "number", "boolean"], description: "text" },
+              bold: { type: "boolean" },
+              italic: { type: "boolean" },
+              color: { type: "string", description: "a theme token or #hex" },
+              link: { type: "string", description: "a URL" },
+            },
+            additionalProperties: false,
+          },
+        },
+        "styled text runs",
+      );
     case "swipe":
       return {
         type: "array",
@@ -128,6 +166,19 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
     additionalProperties: false,
   });
   const expr = kind("expr");
+  // Async actions (and test-registered ones): {"<name>": {args}, "then"?, "else"?}.
+  const asyncActions = Object.entries(ASYNC_ACTIONS).map(([name, info]) =>
+    action(name, {
+      [name]: {
+        type: "object",
+        title: `${name} args`,
+        properties: Object.fromEntries(Object.entries(info.args).map(([k, v]) => [k, { anyOf: [kind(v), { type: "string", description: "an expression evaluated in app scope" }] }])),
+        additionalProperties: false,
+      },
+      then: ref("actions"),
+      else: ref("actions"),
+    })
+  );
   return {
     $defs: {
       ...Object.fromEntries(SHARED_KINDS.map((k) => [k, kindSchema(k)])),
@@ -144,6 +195,7 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
           action("back", { back: { type: "boolean" } }),
           action("if", { if: expr, then: ref("actions"), else: ref("actions") }, ["then"]),
           action("call", { call: { type: "string" }, args: { type: "object" } }),
+          ...asyncActions,
         ],
         description: `an action: ${ACTION_KINDS.join(", ")}`,
       },
@@ -179,7 +231,30 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
           darkTheme: { type: "object", additionalProperties: { type: "string" } },
           data: { type: "object", additionalProperties: ref("field") },
           state: { type: "object" },
+          capabilities: {
+            type: "array",
+            title: "capabilities",
+            description: `what of the container the app uses: ${Object.keys(CAPABILITIES).join(", ")}`,
+            items: { enum: Object.keys(CAPABILITIES) },
+          },
+          schedule: { type: "object", additionalProperties: {
+            type: "object", required: ["at"], additionalProperties: false,
+            properties: {
+              at: { anyOf: [{ type: "string", pattern: "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$" }, BINDING, { type: "object", required: ["sun"], additionalProperties: false, properties: { sun: words(["sunrise", "sunset", "noon", "dawn", "dusk"]), offset: { type: "number" } } }] },
+              days: { type: "array", items: words(["sun", "mon", "tue", "wed", "thu", "fri", "sat"]) },
+              if: kind("expr"), title: kind("string"), body: kind("string"), sound: words(["@chime", "@gentle", "@alarm"]), alarm: { type: "boolean" }, open: { type: "string" },
+            },
+          } },
           components: { type: "object", additionalProperties: ref("node") },
+          widgets: { type: "object", additionalProperties: {
+            type: "object", title: "widget", required: ["sizes", "body"], additionalProperties: false,
+            properties: {
+              title: { type: "string" },
+              sizes: { type: "array", minItems: 1, items: words(Object.keys(WIDGET_SIZES)) },
+              body: ref("node"),
+              open: { type: "string" },
+            },
+          } },
           screens: { type: "object", additionalProperties: ref("screen"), minProperties: 1 },
           start: { type: "string" },
         },
@@ -299,7 +374,7 @@ function check(v: unknown, schema: Schema, defs: Record<string, Schema>, where: 
     if (typeOf(v) === "object" && typeof o!.type === "string" && branches.some((b) => b.properties?.type?.const !== undefined)) {
       errors.push(`${here}: unknown type '${o!.type}'`);
     } else if (typeOf(v) === "object" && branches.some((b) => b.title?.endsWith(" action"))) {
-      errors.push(`${here}: unknown action ${show(v)}; use one of ${ACTION_KINDS.join(", ")}`);
+      errors.push(`${here}: unknown action ${show(v)}; use one of ${[...ACTION_KINDS, ...Object.keys(ASYNC_ACTIONS)].join(", ")}`);
     } else {
       errors.push(`${here}: expected ${describe(s, defs)}, not ${show(v)}`);
     }

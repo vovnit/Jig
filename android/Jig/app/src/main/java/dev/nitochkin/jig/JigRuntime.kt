@@ -39,7 +39,9 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     init {
         val toggle = renderer.toggleSize()
-        js.post { setUp(toggle) }
+        val slider = renderer.sliderSize()
+        val timePicker = renderer.timePickerSize()
+        js.post { setUp(toggle, slider, timePicker) }
         renderer.dispatch = { id, name, payload -> dispatch(id, name, payload) }
     }
 
@@ -71,6 +73,8 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
     }
 
     /** Pops one screen (system back). */
+    fun open(app: String, screen: String) { js.post { call("__jigOpen", app, screen) } }
+
     fun goBack() {
         js.post { call("__jigBack") }
     }
@@ -84,10 +88,10 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     // ---------- Setup (JS thread) ----------
 
-    private fun setUp(toggle: Pair<Double, Double>) {
+    private fun setUp(toggle: Pair<Double, Double>, slider: Pair<Double, Double>, timePicker: Pair<Double, Double>) {
         QuickJSLoader.init()
         qjs = QuickJSContext.create()
-        installNative(toggle)
+        installNative(toggle, slider, timePicker)
         evaluateAsset("runtime/jig-core.js")
         // Shared with the iOS host: adapts the runtime's Host interface to `__native`.
         evaluateAsset("runtime/jig-host.js")
@@ -120,7 +124,7 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
         main.post { onTheme?.invoke(theme) }
     }
 
-    private fun installNative(toggle: Pair<Double, Double>) {
+    private fun installNative(toggle: Pair<Double, Double>, slider: Pair<Double, Double>, timePicker: Pair<Double, Double>) {
         val native = qjs.createNewJSObject()
         val database = SqlDatabase(appContext)
         val secrets = SecretStore(appContext)
@@ -131,19 +135,23 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
             null
         })
         native.setProperty("measure", JSCallFunction { args ->
+            // The style travels as JSON so spans reach measurement too.
+            val style = runCatching { JSONObject(args[1] as String) }.getOrElse { JSONObject() }
             val size = TextStyle.measure(
                 text = args[0] as String,
-                fontSize = (args[1] as Number).toDouble(),
-                fontWeight = (args[2] as Number).toInt(),
-                lineHeight = (args[3] as Number).toDouble(),
-                maxWidth = (args[4] as Number).toDouble(),
+                style = style,
+                maxWidth = (args[2] as Number).toDouble(),
                 density = renderer.density,
-                mono = args.getOrNull(5) == "mono",
             )
             pair(size.first, size.second)
         })
         native.setProperty("measureControl", JSCallFunction { args ->
-            if (args[0] == "toggle") pair(toggle.first, toggle.second) else pair(0.0, 0.0)
+            when (args[0]) {
+                "toggle" -> pair(toggle.first, toggle.second)
+                "slider" -> pair(slider.first, slider.second)
+                "timePicker" -> pair(timePicker.first, timePicker.second)
+                else -> pair(0.0, 0.0)
+            }
         })
         native.setProperty("requestFrame", JSCallFunction {
             main.post(::scheduleFrame)
@@ -167,6 +175,12 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
                     resolve(if (png != null) Services.result(JSONObject().put("data", png)) else Services.error("No view to take a picture of"))
                 }
             } else Services.handle(args[0] as String, args[1] as String, resolve, progress)
+            null
+        })
+        // A timer for the runtime (the clock's ticks): QuickJS has no setTimeout here.
+        native.setProperty("after", JSCallFunction { args ->
+            val id = (args[1] as Number).toInt()
+            js.postDelayed({ call("__jigTimer", id) }, (args[0] as Number).toLong())
             null
         })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })

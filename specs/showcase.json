@@ -2,6 +2,17 @@
   "id": "showcase",
   "name": "Showcase",
   "description": "Every primitive in one place: a parity check for hosts.",
+  "capabilities": [
+    "location",
+    "heading",
+    "files",
+    "photos",
+    "camera",
+    "share",
+    "haptics",
+    "screen",
+    "speech"
+  ],
   "data": {
     "notes": {
       "type": "list",
@@ -57,7 +68,18 @@
     ],
     "moved": false,
     "keyDraft": "",
-    "rows": []
+    "volume": 0.5,
+    "alarm": "07:00",
+    "photo": null,
+    "snap": null,
+    "docName": "",
+    "docText": "",
+    "rows": [],
+    "chimePlaying": false,
+    "gentlePlaying": false,
+    "alarmOn": false,
+    "awake": false,
+    "brightness": 1
   },
   "screens": {
     "main": {
@@ -483,6 +505,30 @@
                 "navigate": "long"
               }
             ]
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Open device screen",
+            "onTap": {
+              "navigate": "device"
+            }
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Open files screen",
+            "onTap": {
+              "navigate": "files"
+            }
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Open media screen",
+            "onTap": {
+              "navigate": "media"
+            }
           }
         ]
       }
@@ -550,6 +596,441 @@
             }
           ]
         }
+      }
+    },
+    "device": {
+      "title": "Device",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 20
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Slider: {{volume}}"
+          },
+          {
+            "type": "slider",
+            "bind": "volume",
+            "min": 0,
+            "max": 1,
+            "step": 0.01
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Alarm: {{alarm}}"
+          },
+          {
+            "type": "timePicker",
+            "bind": "alarm"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Location"
+          },
+          {
+            "type": "text",
+            "value": "{{location ? location.lat + ', ' + location.lon : 'Locating…'}}"
+          },
+          {
+            "type": "text",
+            "value": "{{location ? (sunTimes(location.lat, location.lon, today()).sunrise ? 'Sunrise ' + formatDate(sunTimes(location.lat, location.lon, today()).sunrise, 'HH:mm') : 'No sunrise today') : 'Sunrise —'}}"
+          },
+          {
+            "type": "text",
+            "value": "{{location ? (sunTimes(location.lat, location.lon, today()).sunset ? 'Sunset ' + formatDate(sunTimes(location.lat, location.lon, today()).sunset, 'HH:mm') : 'No sunset today') : 'Sunset —'}}"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Heading"
+          },
+          {
+            "type": "text",
+            "value": "{{heading ? heading.degrees + '°' : 'No compass'}}"
+          }
+        ]
+      }
+    },
+    "files": {
+      "title": "Files",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 20
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Picked photo"
+          },
+          {
+            "type": "button",
+            "label": "Pick a photo",
+            "onTap": {
+              "pickPhoto": {},
+              "then": {
+                "set": "photo",
+                "to": "value"
+              }
+            }
+          },
+          {
+            "type": "image",
+            "if": "photo",
+            "src": "{{photo}}"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Camera"
+          },
+          {
+            "type": "button",
+            "label": "Take a photo",
+            "onTap": {
+              "takePhoto": {},
+              "then": {
+                "set": "snap",
+                "to": "value"
+              }
+            }
+          },
+          {
+            "type": "image",
+            "if": "snap",
+            "src": "{{snap}}"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Text file"
+          },
+          {
+            "type": "button",
+            "label": "Pick a text file",
+            "onTap": {
+              "pickFile": {
+                "accept": [
+                  "txt",
+                  "text/plain"
+                ]
+              },
+              "then": [
+                {
+                  "set": "docName",
+                  "to": "value.name"
+                },
+                {
+                  "readFile": {
+                    "file": "value",
+                    "as": "'text'"
+                  },
+                  "then": {
+                    "set": "docText",
+                    "to": "slice(value, 0, 300)"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "type": "text",
+            "if": "docName",
+            "value": "{{docName}}"
+          },
+          {
+            "type": "text",
+            "if": "docText",
+            "value": "{{docText}}"
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Sharing"
+          },
+          {
+            "type": "button",
+            "label": "Share some text",
+            "onTap": {
+              "share": {
+                "text": "'Shared from the Showcase files screen'"
+              }
+            }
+          }
+        ]
+      }
+    },
+    "media": {
+      "title": "Media",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 20
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Sounds"
+          },
+          {
+            "type": "audio",
+            "src": "@chime",
+            "playing": "{{chimePlaying}}",
+            "onEnded": {
+              "set": "chimePlaying",
+              "to": "false"
+            }
+          },
+          {
+            "type": "button",
+            "label": "Play chime",
+            "onTap": {
+              "set": "chimePlaying",
+              "to": "true"
+            }
+          },
+          {
+            "type": "audio",
+            "src": "@gentle",
+            "playing": "{{gentlePlaying}}",
+            "onEnded": {
+              "set": "gentlePlaying",
+              "to": "false"
+            }
+          },
+          {
+            "type": "button",
+            "label": "Play gentle",
+            "onTap": {
+              "set": "gentlePlaying",
+              "to": "true"
+            }
+          },
+          {
+            "type": "audio",
+            "src": "@alarm",
+            "playing": "{{alarmOn}}",
+            "loop": true
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 12,
+              "align": "center"
+            },
+            "children": [
+              {
+                "type": "text",
+                "value": "Alarm",
+                "style": {
+                  "grow": 1
+                }
+              },
+              {
+                "type": "toggle",
+                "bind": "alarmOn"
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Video"
+          },
+          {
+            "type": "video",
+            "src": "https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4",
+            "controls": true,
+            "style": {
+              "aspectRatio": 1.7777777777777777
+            }
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Haptics"
+          },
+          {
+            "type": "column",
+            "style": {
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "row",
+                "style": {
+                  "gap": 8
+                },
+                "children": [
+                  {
+                    "type": "button",
+                    "label": "light",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'light'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  },
+                  {
+                    "type": "button",
+                    "label": "medium",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'medium'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  },
+                  {
+                    "type": "button",
+                    "label": "heavy",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'heavy'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  }
+                ]
+              },
+              {
+                "type": "row",
+                "style": {
+                  "gap": 8
+                },
+                "children": [
+                  {
+                    "type": "button",
+                    "label": "success",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'success'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  },
+                  {
+                    "type": "button",
+                    "label": "warning",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'warning'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  },
+                  {
+                    "type": "button",
+                    "label": "error",
+                    "onTap": {
+                      "haptic": {
+                        "style": "'error'"
+                      }
+                    },
+                    "style": {
+                      "grow": 1
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Screen"
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 12,
+              "align": "center"
+            },
+            "children": [
+              {
+                "type": "text",
+                "value": "Keep the screen on",
+                "style": {
+                  "grow": 1
+                }
+              },
+              {
+                "type": "toggle",
+                "bind": "awake",
+                "onChange": {
+                  "keepAwake": {
+                    "on": "value"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Brightness: {{brightness}}"
+          },
+          {
+            "type": "slider",
+            "bind": "brightness",
+            "min": 0,
+            "max": 1,
+            "step": 0.01,
+            "onChange": {
+              "brightness": {
+                "level": "value"
+              }
+            }
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Speech"
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "button",
+                "label": "Read aloud",
+                "onTap": {
+                  "speak": {
+                    "text": "'This is the Showcase media screen'"
+                  }
+                }
+              },
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Stop",
+                "onTap": {
+                  "stopSpeaking": {}
+                }
+              }
+            ]
+          }
+        ]
       }
     }
   }
