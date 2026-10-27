@@ -58,6 +58,12 @@ nonisolated enum Services {
             DispatchQueue.main.async { MainActor.assumeIsolated { FileService.takePhoto(args, done: done) } }
         case "share":
             DispatchQueue.main.async { MainActor.assumeIsolated { FileService.share(args, done: done) } }
+        case "script.run":
+            DispatchQueue.main.async { MainActor.assumeIsolated { Sandboxes.shared.run(args, done: done) } }
+        case "script.render":
+            DispatchQueue.main.async { MainActor.assumeIsolated { Sandboxes.shared.render(args, done: done) } }
+        case "script.close":
+            DispatchQueue.main.async { MainActor.assumeIsolated { Sandboxes.shared.close(args, done: done) } }
         default:
             done(error("No '\(service)' service on iOS"))
         }

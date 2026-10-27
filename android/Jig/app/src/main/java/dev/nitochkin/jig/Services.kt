@@ -78,6 +78,9 @@ object Services {
             "takePhoto" -> takePhoto(args, done)
             "share" -> share(args, done)
             "widgets.set" -> io.execute { appContext?.let { WidgetStore.set(it, args, done) } ?: done(error("No file store here")) }
+            "script.run" -> Sandbox.run(args, done)
+            "script.render" -> Sandbox.render(args, done)
+            "script.close" -> Sandbox.close(args, done)
             else -> done(error("No '$service' service on Android"))
         }
     }
