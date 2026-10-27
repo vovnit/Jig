@@ -112,7 +112,15 @@ final class Sandboxes: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
             // WebKit's error for a script failure. `.page` shares the JS globals with
             // the `evaluateJavaScript`-loaded scripts; a named isolated world would not
             // see `window.__jigScripts`.
-            let raw = try await view.callAsyncJavaScript(Self.callBody, arguments: ["scriptName": script, "fnName": fn, "input": input ?? NSNull()], in: nil, in: .page) as? String ?? ""
+            // The completion-handler form: the async overload hands back an empty value here.
+            let raw: String = try await withCheckedThrowingContinuation { cont in
+                view.callAsyncJavaScript(Self.callBody, arguments: ["scriptName": script, "fnName": fn, "input": input ?? NSNull()], in: nil, in: .page) { result in
+                    switch result {
+                    case let .success(value): cont.resume(returning: value as? String ?? "")
+                    case let .failure(error): cont.resume(throwing: error)
+                    }
+                }
+            }
             return Self.finish(raw: raw, answerKey: answerKey)
         } catch {
             if let current = boxes[app], ObjectIdentifier(current) == boxID, current.pageGen == gen, current.view != nil { return Services.error(Self.jsMessage(error)) }
@@ -256,27 +264,27 @@ final class Sandboxes: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
     }
 
     /// Calls `exports[fn](input)` and answers a JSON envelope with the result's JSON
-    /// or the exception's message, as a returned Promise the host awaits.
+    /// or the exception's message; `callAsyncJavaScript` runs it as an async body.
     /// `JSON.stringify` of the result can throw (a cycle, a BigInt), so that too is
     /// caught inside the wrapper and answered as a failure.
     private static let callBody = """
-    return Promise.resolve().then(function () {
-      var table = window.__jigScripts[scriptName];
-      var fn = table ? table[fnName] : undefined;
+    let out;
+    try {
+      const table = window.__jigScripts[scriptName];
+      const fn = table ? table[fnName] : undefined;
       if (typeof fn !== "function") throw new Error("No '" + fnName + "' in script '" + scriptName + "'");
-      return fn(input);
-    }).then(function (out) {
-      var json;
-      try { json = JSON.stringify(out); } catch (e) {
-        var msg = (e && e.message) ? String(e.message) : String(e);
-        return JSON.stringify({ ok: false, message: msg, error: msg });
-      }
-      if (json === undefined) json = "null";
-      return JSON.stringify({ ok: true, json: json });
-    }, function (e) {
-      var msg = (e && e.message) ? String(e.message) : String(e);
+      out = await fn(input);
+    } catch (e) {
+      const msg = (e && e.message) ? String(e.message) : String(e);
       return JSON.stringify({ ok: false, message: msg, error: msg });
-    });
+    }
+    let json;
+    try { json = JSON.stringify(out); } catch (e) {
+      const msg = (e && e.message) ? String(e.message) : String(e);
+      return JSON.stringify({ ok: false, message: msg, error: msg });
+    }
+    if (json === undefined) json = "null";
+    return JSON.stringify({ ok: true, json: json });
     """
 
     private static func jsString(_ value: String) -> String {
