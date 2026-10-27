@@ -356,7 +356,7 @@ export const STYLE_KEYS: Record<string, ValueKind> = {
   gap: "number",
   align: "align", alignItems: "align", justify: "justify", justifyContent: "justify", alignSelf: "align",
   grow: "number", flexGrow: "number", flex: "number", shrink: "number", flexShrink: "number",
-  position: ["absolute", "relative"], top: "number", left: "number", right: "number", bottom: "number",
+  position: ["absolute", "relative"], top: "dim", left: "dim", right: "dim", bottom: "dim",
   aspectRatio: "number",
   background: "color", color: "color",
   radius: "number", borderWidth: "number", borderColor: "color",
@@ -393,6 +393,7 @@ export const CAPABILITIES: Record<string, CapabilityInfo> = {
   files: { doc: "open files you choose", asks: false },
   photos: { doc: "use photos you choose", asks: false },
   camera: { doc: "take photos", asks: true },
+  vision: { doc: "send a photo to Meta's model to find things in it", asks: true },
   share: { doc: "share things you choose", asks: false },
 };
 
@@ -425,6 +426,7 @@ export const ASYNC_ACTIONS: Record<string, AsyncActionInfo> = {
   share: { capability: "share", doc: "share text, a link or a file you choose", args: { text: "text", url: "text", file: "any" }, result: "{}" },
   readFile: { capability: "files", doc: "read a file as text or base64", args: { file: "any", as: ["text", "base64"] }, result: "the file's text or base64" },
   deleteFile: { capability: "files", doc: "delete a file from the app's store", args: { file: "any" }, result: "{}" },
+  findObjects: { capability: "vision", doc: "send a photo to Meta's model to find things in it", args: { photo: "any", prompts: "any" }, result: "{counts: {prompt: number}, objects: [{label, x, y, width, height}]}" },
 };
 
 /** Registers an async action and its capability (for tests; phases add real ones above). */

@@ -104,6 +104,10 @@ export interface RuntimeOptions {
   gate?: (app: AppSpec, capability: string) => boolean | Promise<boolean>;
 }
 
+/** A named container service in JS: answers with the result or throws its error. */
+export type ContainerServiceHandler = (args: Record<string, unknown>, ctx: { app: string; runtime: Runtime }) => Promise<unknown> | unknown;
+export type ContainerServiceName = string;
+
 /** An app shown inside an `app` node: its own runtime, laid out at the node's size. */
 interface Embedded {
   node: ViewNode;
@@ -198,6 +202,12 @@ export class Runtime {
   gate?: (app: AppSpec, capability: string) => boolean | Promise<boolean>;
   /** Container services the trusted shell calls with `{"call": name, "args": {...}}`. */
   services = new Map<string, (args: Record<string, unknown>) => void>();
+  /**
+   * Named container services in JS (the shell's): an embedded app's async call reaches
+   * these before falling through to the native host, so the key stays in the shell.
+   * Handlers answer with the result or throw its error message.
+   */
+  containerServices = new Map<ContainerServiceName, ContainerServiceHandler>();
   private embeds = new Set<Embedded>();
   /** Set for a whiteboard card: the app shows this screen and doesn't navigate. */
   private pinned: string | null = null;
@@ -1185,6 +1195,16 @@ export class Runtime {
       },
       after: this.host.after && ((ms, cb) => this.host.after!(ms, cb)),
       call: (service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void, progress?: (update: Record<string, unknown>) => void) => {
+        // A container service in JS answers here, so an embedded app's call reaches the
+        // shell without the key ever leaving it. Anything else falls through to the host.
+        const handler = this.containerServices.get(service);
+        if (handler) {
+          const appId = (e.rt.spec as AppSpec | undefined)?.id ?? "";
+          void Promise.resolve()
+            .then(() => handler(args, { app: appId, runtime: this }))
+            .then((result) => done(result), (err) => done(null, err instanceof Error ? err.message : String(err ?? "Failed")));
+          return;
+        }
         // An embedded app reaches only its declared async services; the shell's stay shell-only.
         // `script.run` forwards like one: the host answers it once custom code runs.
         const parent = this.host.call;
@@ -2078,6 +2098,30 @@ export class Runtime {
           return;
         }
         const call = this.host.call;
+        // A container service in JS answers here (the shell's): the key never leaves it.
+        const container = this.containerServices.get(name);
+        if (container) {
+          let answered = false;
+          void Promise.resolve()
+            .then(() => container(args, { app: spec.id, runtime: this }))
+            .then(
+              (result) => {
+                if (answered) return;
+                answered = true;
+                if (gen !== this.generation) return;
+                if (branch.then) this.run(branch.then, childScope(scope, { value: result }));
+              },
+              (e) => {
+                if (answered) return;
+                answered = true;
+                if (gen !== this.generation) return;
+                const message = e instanceof Error ? e.message : String(e ?? "Failed");
+                if (branch.else) this.run(branch.else, childScope(scope, { error: message }));
+                else this.error(where, message);
+              },
+            );
+          return;
+        }
         if (!call) return fail(`The host has no '${name}' service`);
         // Book actions run in core over `zip.read`, with the app's identity injected.
         if (BOOK_ACTIONS.has(name)) return this.runBookAction(name, args, scope, branch, where, gen);

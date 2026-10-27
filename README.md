@@ -124,6 +124,8 @@ App `data` lives in SQLite, in one database per device shared by every app, so t
 
 **Files.** Large data lives in files, not in rows: a data field of type `file` holds a handle `{id, name, type, size}` (or null), and a list's items may have `file` fields (e.g. books: `{title, file}`). Actions pick files, photos and camera shots into the app's store (`pickFile`, `pickPhoto`, `takePhoto`), read them as text or base64 (`readFile`), delete them (`deleteFile`) and share text, links or files (`share`); an `image`, `video` or `audio` whose `src` is a handle loads `jig-file:<app>/<id>` from that store. Each host keeps the store in the app's sandbox (Origin Private File System on the web), with a small index of the handles, and deleting the app clears its files with `files.clear`.
 
+**Photos.** `findObjects` sends a photo to SAM 3.1 to count and locate things in it (a shelf, a bookshelf, a parking lot): one prompt per phrase, answered as `{counts, objects}` with each box 0..1 of the image, in reading order. The shell runs it in JS with its own key, so apps never touch `http`. Boxes draw as an `overlay` over the `image`, each an absolutely positioned box with `left`/`top`/`width`/`height` as percentages.
+
 ### Lists
 
 `list` renders items as native-looking rows: an inset card with hairline separators (or full-width rows with `"variant": "plain"`), an optional `header` and `footer`, and an `empty` state.
@@ -268,8 +270,8 @@ After profiling, if needed:
 - [x] EPUB books: zip reading on each host, parsing and chapters in core, styled text with `spans`
 - [x] Home-screen widgets: rendered by the app from the spec, timelines for clock widgets (WidgetKit extension on iOS, an app widget on Android, a preview in the playground)
 - [x] Shared personal data store with permissions between apps
-- [ ] Camera input with SAM 3.1
-- [ ] Icons with Muse Image
+- [x] Camera input with SAM 3.1
+- [x] Icons with Muse Image: a flat icon on the app's accent color, drawn for new apps, on demand, or lazily from the home list
 
 ### Demo apps
 - [x] Water tracker
@@ -278,7 +280,7 @@ After profiling, if needed:
 - [x] Showcase screens for the device (slider, time picker, location, sun times, compass), media and files
 - [x] EPUB reader: a library of books opened from files, each read chapter by chapter as styled text with links, the place in every book remembered
 - [x] Workout log that feeds a meal planner (shared data store demo)
-- [ ] Pantry inventory from a shelf photo (SAM demo)
+- [x] Pantry inventory from a shelf photo (SAM demo)
 
 ## Plan
 

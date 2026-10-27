@@ -6,8 +6,10 @@ import type { Runtime } from "../runtime.ts";
 import type { AppSpec } from "../spec.ts";
 import { formatCollections } from "../shared.ts";
 import { CAPABILITIES } from "../spec.ts";
+import { installVision } from "../vision.ts";
 import { type AgentDeps, type BuilderView, type EditRequest, type LogEntry, runEdit } from "./agent.ts";
 import { addApp, commitEdit, findApp, redoEdit, undoEdit } from "./registry.ts";
+import { installIcons, requestIcon } from "./icons.ts";
 
 export function installBuilder(shell: Runtime): void {
   let nextLog = 1;
@@ -102,8 +104,13 @@ export function installBuilder(shell: Runtime): void {
     shell.set("newId", id);
     shell.set("newPrompt", "");
     log({ role: "user", text });
-    void run(id, {
+    const done = run(id, {
       text: `Create a new app for this, replacing the placeholder spec (keep id "${id}"): ${text}\n\nWrite the complete spec in your message as one \`\`\`json block first, then call set_spec with no arguments.`,
+    });
+    // The model names the app as it writes it; only then is there something to draw.
+    void done.then(() => {
+      const entry = findApp(shell, id);
+      if (entry && !entry.icon && entry.spec.name !== "New app") void requestIcon(shell, id);
     });
   });
 
@@ -135,6 +142,8 @@ export function installBuilder(shell: Runtime): void {
 
   installGate(shell);
   installBackground(shell);
+  installVision(shell);
+  installIcons(shell);
 }
 
 /** Stored answers, by app: `grants[appId][capability]` is what the user said. */

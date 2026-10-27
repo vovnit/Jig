@@ -1,0 +1,232 @@
+{
+  "id": "pantry",
+  "name": "Pantry",
+  "description": "Count what's on the shelf from a photo.",
+  "theme": { "accent": "#d9480f" },
+  "data": {
+    "items": {
+      "type": "list",
+      "fields": { "id": "string", "name": "string", "prompt": "string", "count": "number", "day": "date" },
+      "default": [
+        { "id": "p1", "name": "Canned tomatoes", "prompt": "can of tomatoes", "count": 3, "day": "2026-10-24" },
+        { "id": "p2", "name": "Jars", "prompt": "jar", "count": 4, "day": "2026-10-24" },
+        { "id": "p3", "name": "Spaghetti", "prompt": "spaghetti", "count": 1, "day": "2026-10-24" }
+      ]
+    }
+  },
+  "state": {
+    "photo": null,
+    "objects": [],
+    "counts": {},
+    "error": "",
+    "draftName": "",
+    "draftPrompt": "",
+    "counting": false
+  },
+  "capabilities": ["vision", "camera", "photos"],
+  "publish": {
+    "pantry": { "from": "items", "doc": "Pantry inventory", "fields": ["name", "count", "day"] }
+  },
+  "screens": {
+    "main": {
+      "title": "Pantry",
+      "body": {
+        "type": "column",
+        "style": { "gap": 16 },
+        "children": [
+          {
+            "type": "text",
+            "variant": "callout",
+            "value": "{{len(items)}} items in the pantry",
+            "style": { "color": "muted" }
+          },
+          {
+            "type": "list",
+            "items": "items",
+            "as": "item",
+            "empty": "No items yet. Add one below.",
+            "swipe": [{ "label": "Delete", "do": { "remove": "item" } }],
+            "row": {
+              "type": "column",
+              "style": { "gap": 4 },
+              "children": [
+                {
+                  "type": "row",
+                  "style": { "gap": 8, "align": "center" },
+                  "children": [
+                    { "type": "textfield", "bind": "item.name", "style": { "grow": 1 } },
+                    { "type": "text", "value": "{{item.count}}", "style": { "color": "muted" } }
+                  ]
+                },
+                {
+                  "type": "row",
+                  "style": { "gap": 8, "align": "center" },
+                  "children": [
+                    { "type": "textfield", "bind": "item.prompt", "placeholder": "photo prompt, e.g. jar", "style": { "grow": 1 } },
+                    { "type": "text", "variant": "caption", "value": "{{item.day}}", "style": { "color": "muted" } }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "type": "row",
+            "style": { "gap": 8, "align": "center" },
+            "children": [
+              { "type": "textfield", "placeholder": "Item", "bind": "draftName" },
+              { "type": "textfield", "placeholder": "Prompt", "bind": "draftPrompt", "style": { "width": 110 } },
+              {
+                "type": "button",
+                "label": "Add",
+                "onTap": {
+                  "if": "trim(draftName) != '' && trim(draftPrompt) != ''",
+                  "then": [
+                    { "push": "items", "value": { "id": "uid()", "name": "trim(draftName)", "prompt": "trim(draftPrompt)", "count": "0", "day": "today()" } },
+                    { "set": "draftName", "to": "''" },
+                    { "set": "draftPrompt", "to": "''" }
+                  ]
+                }
+              }
+            ]
+          },
+          {
+            "type": "button",
+            "label": "Count from a photo",
+            "onTap": { "navigate": "count" }
+          }
+        ]
+      }
+    },
+    "count": {
+      "title": "Count from a photo",
+      "body": {
+        "type": "column",
+        "style": { "gap": 12 },
+        "children": [
+          {
+            "type": "row",
+            "style": { "gap": 8 },
+            "children": [
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Take photo",
+                "style": { "grow": 1 },
+                "onTap": {
+                  "takePhoto": {},
+                  "then": [
+                    { "set": "photo", "to": "value" },
+                    { "set": "objects", "to": "[]" },
+                    { "set": "counts", "to": "{}" },
+                    { "set": "error", "to": "''" }
+                  ],
+                  "else": { "set": "error", "to": "error" }
+                }
+              },
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Pick photo",
+                "style": { "grow": 1 },
+                "onTap": {
+                  "pickPhoto": {},
+                  "then": [
+                    { "set": "photo", "to": "value" },
+                    { "set": "objects", "to": "[]" },
+                    { "set": "counts", "to": "{}" },
+                    { "set": "error", "to": "''" }
+                  ],
+                  "else": { "set": "error", "to": "error" }
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "callout",
+            "if": "error",
+            "value": "{{error}}",
+            "style": { "color": "danger" }
+          },
+          {
+            "type": "overlay",
+            "if": "photo && len(objects) > 0",
+            "children": [
+              { "type": "image", "src": "{{photo}}", "style": { "width": "100%" } },
+              {
+                "type": "column",
+                "each": "objects",
+                "as": "o",
+                "style": {
+                  "position": "absolute",
+                  "left": "{{pct(o.x)}}",
+                  "top": "{{pct(o.y)}}",
+                  "width": "{{pct(o.width)}}",
+                  "height": "{{pct(o.height)}}",
+                  "borderWidth": 2,
+                  "borderColor": "accent"
+                }
+              }
+            ]
+          },
+          {
+            "type": "image",
+            "if": "photo && len(objects) == 0",
+            "src": "{{photo}}",
+            "style": { "width": "100%" }
+          },
+          {
+            "type": "button",
+            "label": "{{counting ? 'Counting…' : 'Count'}}",
+            "onTap": [
+              { "set": "counting", "to": "true" },
+              { "set": "error", "to": "''" },
+              {
+                "findObjects": { "photo": "photo", "prompts": "map(items, i => trim(i.prompt))" },
+                "then": [
+                  { "set": "objects", "to": "value.objects" },
+                  { "set": "counts", "to": "value.counts" },
+                  { "set": "counting", "to": "false" }
+                ],
+                "else": [
+                  { "set": "error", "to": "error" },
+                  { "set": "counting", "to": "false" }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "if": "len(keys(counts)) > 0",
+            "header": "Found",
+            "items": "items",
+            "as": "item",
+            "row": {
+              "type": "row",
+              "style": { "justify": "between" },
+              "children": [
+                { "type": "text", "value": "{{item.name}}", "style": { "grow": 1 } },
+                { "type": "text", "value": "{{counts[trim(item.prompt)] ?? 0}}", "style": { "color": "muted" } }
+              ]
+            }
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "if": "len(keys(counts)) > 0",
+            "label": "Save counts",
+            "onTap": [
+              {
+                "set": "items",
+                "to": "map(items, i => {id: i.id, name: i.name, prompt: i.prompt, count: counts[trim(i.prompt)] ?? i.count, day: contains(keys(counts), trim(i.prompt)) ? today() : i.day})"
+              },
+              { "set": "objects", "to": "[]" },
+              { "set": "counts", "to": "{}" },
+              { "back": true }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

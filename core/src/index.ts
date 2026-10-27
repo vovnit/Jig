@@ -1,5 +1,5 @@
 export { Runtime, PRIMITIVE_TYPES } from "./runtime.ts";
-export type { RuntimeOptions } from "./runtime.ts";
+export type { RuntimeOptions, ContainerServiceHandler, ContainerServiceName } from "./runtime.ts";
 export { seedApps, updateApp, runningApp, commitEdit, undoEdit, redoEdit } from "./builder/registry.ts";
 export { installBuilder } from "./builder/index.ts";
 export { validateSpec } from "./builder/validate.ts";
@@ -23,5 +23,7 @@ export { parseXml, unescapeEntities, descendants, child, textOf } from "./xml.ts
 export type { XmlNode, XmlElement, XmlText } from "./xml.ts";
 export { openEpub, readEpubChapter, readEpubImage, resolveHref } from "./epub.ts";
 export type { ZipSource, EpubBook, EpubChapter, EpubSpan, EpubBlockKind, EpubBlock } from "./epub.ts";
+export { installVision, parseSamBoxes, samText } from "./vision.ts";
+export type { FoundBox, FoundObject } from "./vision.ts";
 export { renderWidget, renderWidgetBoth, renderWidgetEntries, renderAppWidgets, isWidgetTimeDependent, widgetOpen, widgetTitle } from "./widgets.ts";
 export type { WidgetNode, WidgetBox, WidgetText, WidgetShape, WidgetImage, WidgetFrame, WidgetEntry, WidgetUpdate, MeasureFn } from "./widgets.ts";

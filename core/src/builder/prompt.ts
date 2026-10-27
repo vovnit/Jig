@@ -73,6 +73,8 @@ An EPUB reader: pickFile {accept: ["epub"]} imports a book file, then openBook {
 ## Files
 A file field holds a handle {id, name, type, size} (or null); a list's items may have file fields (e.g. books: {title, file}). An image, video or audio src can be a file handle: the runtime turns {id} into jig-file:<app>/<id> before the host sees it. To pick a photo into a list: {"pickPhoto": {}, "then": {"push": "photos", "value": {"id": "uid()", "file": "value"}}}.
 
+## Photos
+Count and locate things in a photo (a shelf, a bookshelf, a parking lot): {"findObjects": {"photo": "photo", "prompts": "map(items, i => i.prompt)"}, "then": actions, "else": actions}, needs "vision". photo is a file handle from pickPhoto/takePhoto; prompts is a list of short phrases (or one phrase). Returns {counts: {prompt: n}, objects: [{label, x, y, width, height}]} with each box 0..1 of the image, in reading order. Draw boxes as an overlay over the image, with offsets as percentages: {"type": "overlay", "children": [{"type": "image", "src": "{{photo}}", "style": {"width": "100%"}}, {"type": "column", "each": "objects", "as": "o", "style": {"position": "absolute", "left": "{{pct(o.x)}}", "top": "{{pct(o.y)}}", "width": "{{pct(o.width)}}", "height": "{{pct(o.height)}}", "borderWidth": 2, "borderColor": "accent"}}]}.
 ## Capabilities
 An app declares what of the container it uses: "capabilities": ["clock"]. Reading a live value or running an async action without declaring its capability is rejected.
 ${capabilities()}

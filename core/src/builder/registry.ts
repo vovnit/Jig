@@ -11,6 +11,8 @@ export interface AppEntry {
   /** Earlier specs, newest last, for undo; and undone ones for redo. */
   history?: AppSpec[];
   future?: AppSpec[];
+  /** An icon drawn by Muse Image, as a data URL; the home list shows it instead of the letter tile. */
+  icon?: string;
 }
 
 const HISTORY = 20;

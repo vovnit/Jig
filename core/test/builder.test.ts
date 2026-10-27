@@ -15,7 +15,7 @@ function setup(replies: unknown[]) {
   const shell: AppSpec = {
     id: "shell",
     name: "Shell",
-    data: { apps: { type: "list", default: [] }, apiKey: { type: "string", default: "test-key" } },
+    data: { apps: { type: "list", default: [] }, apiKey: { type: "string", default: "test-key" }, icons: { type: "boolean", default: false } },
     state: { log: [], busy: false, prompt: "", selected: null, mode: "board", focus: "", recording: false, status: "" },
     screens: { home: { body: { type: "text", value: "Home" } } },
   };

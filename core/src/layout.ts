@@ -28,10 +28,10 @@ export interface Box {
   grow?: number;
   shrink?: number;
   absolute: boolean;
-  top?: number;
-  left?: number;
-  right?: number;
-  bottom?: number;
+  top?: Dim;
+  left?: Dim;
+  right?: Dim;
+  bottom?: Dim;
   aspectRatio?: number;
 }
 
@@ -181,10 +181,10 @@ export function parseBox(s: Record<string, unknown>): Box {
     grow: num(s.grow ?? s.flexGrow ?? (s.flex === undefined ? undefined : s.flex)),
     shrink: num(s.shrink ?? s.flexShrink),
     absolute: s.position === "absolute",
-    top: num(s.top),
-    left: num(s.left),
-    right: num(s.right),
-    bottom: num(s.bottom),
+    top: dim(s.top),
+    left: dim(s.left),
+    right: dim(s.right),
+    bottom: dim(s.bottom),
     aspectRatio: num(s.aspectRatio),
   };
 }
@@ -625,8 +625,8 @@ function layoutCanvas(
   for (const c of node.children) {
     const cb = c.box;
     const s = layoutNode(c, resolve(cb.width, width) ?? Infinity, cb.width !== undefined, resolve(cb.height, height) ?? Infinity, cb.height !== undefined, perform, ctx);
-    const x = pl + (cb.left ?? 0);
-    const y = pt + (cb.top ?? 0);
+    const x = pl + (resolve(cb.left, width) ?? 0);
+    const y = pt + (resolve(cb.top, height) ?? 0);
     right = Math.max(right, x + s.width);
     bottom = Math.max(bottom, y + s.height);
     if (perform) setFrame(c, round(x), round(y), round(s.width), round(s.height), ctx);
@@ -639,13 +639,17 @@ function layoutAbsolute(node: ViewNode, width: number, height: number, ctx: Layo
   for (const c of node.children) {
     const cb = c.box;
     if (!cb.absolute) continue;
+    const left = resolve(cb.left, width);
+    const right = resolve(cb.right, width);
+    const top = resolve(cb.top, height);
+    const bottom = resolve(cb.bottom, height);
     let cw = resolve(cb.width, width);
     let ch = resolve(cb.height, height);
-    if (cw === undefined && cb.left !== undefined && cb.right !== undefined) cw = Math.max(0, width - cb.left - cb.right);
-    if (ch === undefined && cb.top !== undefined && cb.bottom !== undefined) ch = Math.max(0, height - cb.top - cb.bottom);
+    if (cw === undefined && left !== undefined && right !== undefined) cw = Math.max(0, width - left - right);
+    if (ch === undefined && top !== undefined && bottom !== undefined) ch = Math.max(0, height - top - bottom);
     const s = layoutNode(c, cw ?? width, cw !== undefined, ch ?? height, ch !== undefined, true, ctx);
-    const x = cb.left ?? (cb.right !== undefined ? width - cb.right - s.width : 0);
-    const y = cb.top ?? (cb.bottom !== undefined ? height - cb.bottom - s.height : 0);
+    const x = left ?? (right !== undefined ? width - right - s.width : 0);
+    const y = top ?? (bottom !== undefined ? height - bottom - s.height : 0);
     setFrame(c, round(x), round(y), round(s.width), round(s.height), ctx);
   }
 }
