@@ -195,6 +195,7 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
           action("back", { back: { type: "boolean" } }),
           action("if", { if: expr, then: ref("actions"), else: ref("actions") }, ["then"]),
           action("call", { call: { type: "string" }, args: { type: "object" } }),
+          action("run", { run: { type: "string" }, args: { type: "object" }, then: ref("actions"), else: ref("actions") }),
           ...asyncActions,
         ],
         description: `an action: ${ACTION_KINDS.join(", ")}`,
@@ -253,6 +254,15 @@ export function specSchema(components?: Record<string, NodeSpec>): Schema {
               sizes: { type: "array", minItems: 1, items: words(Object.keys(WIDGET_SIZES)) },
               body: ref("node"),
               open: { type: "string" },
+            },
+          } },
+          scripts: { type: "object", additionalProperties: {
+            type: "object", title: "script", required: ["code", "exports", "elements"], additionalProperties: false,
+            properties: {
+              doc: { type: "string" },
+              code: { type: "string" },
+              exports: { type: "array", items: { type: "string" } },
+              elements: { type: "array", items: { type: "string" } },
             },
           } },
           screens: { type: "object", additionalProperties: ref("screen"), minProperties: 1 },

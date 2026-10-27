@@ -7,7 +7,7 @@ import { ASYNC_ACTIONS, CAPABILITIES, DEFAULT_THEME, NODE_TYPES, STYLE_KEYS } fr
 /** One line per node type with the props it takes, e.g. `- button {label, variant: primary|...}: a button`. */
 function nodeTypes(): string {
   return Object.entries(NODE_TYPES)
-    .filter(([t]) => t !== "app")
+    .filter(([t]) => t !== "app" && t !== "custom")
     .map(([t, info]) => {
       const props = Object.entries(info.props).map(([k, v]) => (Array.isArray(v) ? `${k}: ${v.join("|")}` : k));
       if (info.children) props.unshift("children");

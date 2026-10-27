@@ -206,6 +206,15 @@ The container's own UI is a Jig app too: [`specs/shell.json`](specs/shell.json),
 
 The runtime is our own trusted JS. An app is a JSON spec with simple expressions for bindings and actions, so the "no arbitrary code" claim holds. If model-written scripts are ever allowed, they should run in a separate QuickJS context with memory and time limits.
 
+### Custom code (reserved)
+
+Apps stay JSON specs. Reserved for later: `scripts` (named JS modules with `code`, `exports` and `elements`), the `run` action (`{"run": "convert.csvToJson", "args": {...}, "then": [...], "else": [...]}`) and the `custom` node (`{"type": "custom", "element": "charts.barChart", "props": {...}, "onEvent": actions}`). Nothing runs yet: `run` answers `else`, and `custom` shows a placeholder.
+
+- Each app's modules run in their own sandbox (a separate QuickJS / JSContext, a Worker on the web) with memory and time limits.
+- Code reaches only declared capabilities (a future `network` capability with listed domains).
+- Libraries are pinned into the app at build time, not fetched at run time.
+- The UI stays the spec: code computes, and draws only inside `custom` elements (which send back `onEvent` with `value`).
+
 ### Custom controls
 
 1. **Composition from primitives** (the main path): shapes, text and taps. A progress ring is two shape arcs, a rating is five stars with `onTap`. Such a control works on every platform right away, and the model can describe it directly in the spec. `ring`, `progress` and `check` are built this way.

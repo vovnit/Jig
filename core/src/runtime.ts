@@ -724,6 +724,7 @@ export class Runtime {
     const type = TYPE_ALIASES[spec.type] ?? spec.type;
     if (type === "list") return this.buildList(spec as ListSpec, scope, where);
     if (type === "app") return this.buildApp(spec, scope, where);
+    if (type === "custom") return this.buildCustom(spec, scope, where);
     const component = this.components[type];
     if (component && !isPrimitive(type)) return this.buildComponent(spec, component, scope, where);
     return this.buildPrimitive(type, spec, [{ style: spec.style, scope }], scope, where);
@@ -984,8 +985,9 @@ export class Runtime {
       after: this.host.after && ((ms, cb) => this.host.after!(ms, cb)),
       call: (service: string, args: Record<string, unknown>, done: (result: unknown, error?: string) => void, progress?: (update: Record<string, unknown>) => void) => {
         // An embedded app reaches only its declared async services; the shell's stay shell-only.
+        // `script.run` forwards like one: the host answers it once custom code runs.
         const parent = this.host.call;
-        if (parent && Object.hasOwn(ASYNC_ACTIONS, service)) parent.call(this.host, service, args, done, progress);
+        if (parent && (Object.hasOwn(ASYNC_ACTIONS, service) || service === "script.run")) parent.call(this.host, service, args, done, progress);
         else done(null, "Not allowed");
       },
       // Embedded apps share the top-level runtime's host watches instead of starting their own.
@@ -1041,6 +1043,23 @@ export class Runtime {
         if (e.rt.errors.length) for (const er of e.rt.errors) this.error(`${where} ${er.where}`, er.message);
       });
     });
+    return node;
+  }
+
+  /**
+   * A `custom` element (reserved): a placeholder box from existing primitives, since no
+   * host draws custom UI yet. `onEvent` is accepted and never fired.
+   */
+  private buildCustom(spec: NodeSpec, scope: Scope, where: string): ViewNode {
+    const name = typeof spec.element === "string" ? spec.element : "";
+    const raw = name.includes("{{") ? str(this.evalTemplate(name, scope, `${where}.element`) ?? "") : name;
+    const node = this.buildPrimitive("column", { type: "column", onTap: spec.onTap }, [
+      { style: { borderWidth: 1, borderColor: "border", radius: 12, padding: 12, background: "surface" }, scope },
+      { style: spec.style, scope },
+    ], scope, where);
+    const title = this.buildNode({ type: "text", variant: "caption", value: raw }, scope, `${where}~element`);
+    const note = this.buildNode({ type: "text", variant: "caption", value: "Custom element (not available yet)", style: { color: "muted" } }, scope, `${where}~note`);
+    this.setChildren(node, [title, note]);
     return node;
   }
 
@@ -1711,6 +1730,8 @@ export class Runtime {
         const service = this.services.get(cl.call);
         if (!service) return this.error(where, `Unknown service '${cl.call}'`);
         service((this.evalValue(cl.args ?? {}, scope, where) ?? {}) as Record<string, unknown>);
+      } else if ("run" in a) {
+        return this.runScript(a, scope);
       } else this.error(where, "Unknown action");
     } catch (e) {
       this.error(where, (e as Error).message);
@@ -1718,6 +1739,54 @@ export class Runtime {
   }
 
   private deviceCleanup = new Map<string, Record<string, unknown>>();
+
+  /**
+   * A `run` of custom code (reserved): evaluates `args`, then answers through the
+   * host's `script.run` service like an async action. No host offers it yet, so today
+   * it ends in `else` with "Custom code isn't available yet".
+   */
+  private runScript(a: Action, scope: Scope): void {
+    const where = `action ${JSON.stringify(a)}`;
+    const r = a as { run?: unknown; args?: unknown; then?: Actions; else?: Actions };
+    let ref = typeof r.run === "string" ? r.run : "";
+    if (ref.includes("{{")) {
+      const v = this.evalTemplate(ref, scope, where);
+      ref = typeof v === "string" ? v : str(v ?? "");
+    }
+    const dot = ref.indexOf(".");
+    const script = dot < 0 ? ref : ref.slice(0, dot);
+    const fn = dot < 0 ? "" : ref.slice(dot + 1);
+    const evaluated = this.evalValue((r.args ?? {}) as Record<string, unknown>, scope, where);
+    const args = evaluated && typeof evaluated === "object" && !Array.isArray(evaluated) ? (evaluated as Record<string, unknown>) : {};
+    const spec = this.spec;
+    const gen = this.generation;
+    const missing = "Custom code isn't available yet";
+    const fail = (message: string) => {
+      if (gen !== this.generation) return;
+      if (r.else) this.run(r.else, childScope(scope, { error: message }));
+      else this.error(where, message);
+    };
+    const call = this.host.call;
+    if (!call) {
+      fail(missing);
+      return;
+    }
+    let answered = false;
+    try {
+      call.call(this.host, "script.run", { app: spec.id, script, fn, args }, (result, error) => {
+        if (answered) return;
+        answered = true;
+        if (gen !== this.generation) return;
+        if (error) {
+          const message = error === "Not allowed" || /No 'script\.run'|has no 'script\.run'/.test(error) ? missing : error;
+          if (r.else) this.run(r.else, childScope(scope, { error: message }));
+          else this.error(where, message);
+        } else if (r.then) this.run(r.then, childScope(scope, { value: result }));
+      });
+    } catch (e) {
+      fail((e as Error).message);
+    }
+  }
 
   private restoreDevice(): void {
     for (const [service, args] of this.deviceCleanup) {

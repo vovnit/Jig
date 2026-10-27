@@ -44,6 +44,15 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   }
   // Declared capabilities; using a live value or an async action without its own is rejected.
   const granted = new Set(Array.isArray(s.capabilities) ? s.capabilities : []);
+  // Declared script modules (reserved): `run` names one of their exports, `custom` one of their elements.
+  const scripts = s.scripts && typeof s.scripts === "object" ? (s.scripts as Record<string, { exports?: unknown; elements?: unknown }>) : {};
+  const scriptExports: string[] = [];
+  const scriptElements: string[] = [];
+  for (const [name, mod] of Object.entries(scripts)) {
+    if (!mod || typeof mod !== "object") continue;
+    if (Array.isArray(mod.exports)) for (const e of mod.exports) if (typeof e === "string") scriptExports.push(`${name}.${e}`);
+    if (Array.isArray(mod.elements)) for (const e of mod.elements) if (typeof e === "string") scriptElements.push(`${name}.${e}`);
+  }
   // Names in scope shadow a live value of the same name (the scope reads it first):
   // data and state keys everywhere, loop variables and component `props` where they apply.
   const baseScope = new Set([...Object.keys(s.data ?? {}), ...Object.keys(s.state ?? {})]);
@@ -82,6 +91,15 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
         const branch = a as { then?: unknown; else?: unknown };
         if (branch.then) checkActions(branch.then, `${w}.then`, scope);
         if (branch.else) checkActions(branch.else, `${w}.else`, scope);
+      } else if ("run" in a) {
+        // Reserved custom code: names `<script>.<export>`; no capability is needed.
+        const r = a as { run?: unknown; then?: unknown; else?: unknown };
+        if (typeof r.run === "string" && !r.run.includes("{{") && !scriptExports.includes(r.run)) {
+          const near = closest(r.run, scriptExports);
+          errors.push(`${w}.run: no script export '${r.run}'${near ? `; did you mean '${near}'?` : ""}`);
+        }
+        if (r.then) checkActions(r.then, `${w}.then`, scope);
+        if (r.else) checkActions(r.else, `${w}.else`, scope);
       } else if ("navigate" in a && !screens.has(a.navigate)) unfinished.push(`${w}: no screen named '${a.navigate}' yet`);
       else if ("call" in a) errors.push(`${w}: apps can't call container services`);
       else if ("if" in a) {
@@ -121,6 +139,13 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
   const used = new Set<string>();
   const checkNode = (n: NodeSpec, where: string, scope: Set<string>, chain: string[] = []): void => {
     if (!n || typeof n !== "object" || Array.isArray(n)) return;
+    if (n.type === "custom") {
+      const el = (n as { element?: unknown }).element;
+      if (typeof el === "string" && !el.includes("{{") && !scriptElements.includes(el)) {
+        const near = closest(el, scriptElements);
+        errors.push(`${where}.element: no script element '${el}'${near ? `; did you mean '${near}'?` : ""}`);
+      }
+    }
     // A repeated node's item scope: `each`/`as`/`indexAs` shadow for everything but `each` itself.
     let inner = scope;
     if (typeof (n as { each?: unknown }).each === "string") {
@@ -237,6 +262,32 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
 function isBareExpr(type: string, key: string): boolean {
   if ((COMMON_PROPS[key] as string) === "expr") return true;
   return ((NODE_TYPES[TYPE_ALIASES[type] ?? type]?.props[key] as string) ?? "") === "expr";
+}
+
+/** The known name a typo was likely meant to be, as in the schema's unknown-key hints. */
+function closest(key: string, known: string[]): string | undefined {
+  const k = key.toLowerCase();
+  let best: string | undefined;
+  let score = Infinity;
+  for (const c of known) {
+    const d = distance(k, c.toLowerCase());
+    if (d < score) [best, score] = [c, d];
+  }
+  return score <= Math.max(1, Math.floor(key.length / 4)) ? best : undefined;
+}
+
+function distance(a: string, b: string): number {
+  const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    let prev = row[0];
+    row[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cur = row[j];
+      row[j] = Math.min(row[j] + 1, row[j - 1] + 1, prev + (a[i - 1] === b[j - 1] ? 0 : 1));
+      prev = cur;
+    }
+  }
+  return row[b.length];
 }
 
 /** A layout-only host: text is measured roughly, nothing is drawn. */

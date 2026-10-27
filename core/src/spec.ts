@@ -123,6 +123,18 @@ export interface WidgetSpec {
   open?: string;
 }
 
+/**
+ * One script module of the app (reserved: stored, never run yet). `code` is JS
+ * source, `exports` the functions it offers for `run`, `elements` the custom
+ * UI elements it offers for `custom` nodes.
+ */
+export interface ScriptSpec {
+  doc?: string;
+  code: string;
+  exports: string[];
+  elements: string[];
+}
+
 export interface AppSpec {
   id: string;
   name: string;
@@ -140,6 +152,8 @@ export interface AppSpec {
   schedule?: Record<string, ScheduleEntry>;
   /** Home-screen widgets, rendered headlessly into static trees (see widgets.ts). */
   widgets?: Record<string, WidgetSpec>;
+  /** Reserved script modules, by name (stored, never run yet). */
+  scripts?: Record<string, ScriptSpec>;
   /** Reusable templates: `{"type": "Card", "props": {...}}` reads them as `props.*`. */
   components?: Record<string, NodeSpec>;
   screens: Record<string, ScreenSpec>;
@@ -303,6 +317,10 @@ export const NODE_TYPES: Record<string, NodeTypeInfo> = {
     doc: "another app embedded (the shell's)",
     props: { spec: "any", screen: "string", scale: "number", interactive: "boolean", selecting: "boolean", onSelect: "actions" },
   },
+  custom: {
+    doc: "a custom element from the app's scripts (reserved: shows a placeholder)",
+    props: { element: "string", props: "any", onEvent: "actions" },
+  },
 };
 
 /** Keys every node takes. */
@@ -335,7 +353,7 @@ export const STYLE_KEYS: Record<string, ValueKind> = {
   transition: "transition",
 };
 
-export const ACTION_KINDS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call"] as const;
+export const ACTION_KINDS = ["set", "toggle", "push", "remove", "navigate", "back", "if", "call", "run"] as const;
 export const FIELD_TYPES: FieldSpec["type"][] = ["string", "number", "boolean", "date", "datetime", "list", "object", "file"];
 
 // ---------- Capabilities (native-capabilities.md) ----------
