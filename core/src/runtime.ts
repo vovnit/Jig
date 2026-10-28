@@ -131,6 +131,23 @@ export interface RuntimeError {
   message: string;
 }
 
+/** One thing the person did in an app, for learning how it is used. */
+export interface Interaction {
+  /** ms since the session started */
+  t: number;
+  kind: "tap" | "change" | "submit" | "swipe" | "page" | "link" | "move" | "navigate" | "back" | "error";
+  screen: string;
+  /** the node's spec path, as select mode records it (`node.path`); "" for navigate, back and error */
+  path: string;
+  /** node type */
+  type: string;
+  /** what the node says: a label or placeholder, at most 60 characters (never the typed value) */
+  label?: string;
+  value?: string | number | boolean;
+  /** the target screen, the swipe action's label, or the error message, at most 120 characters */
+  detail?: string;
+}
+
 /** One subscriber of a shared host watch: an update fan-out and an error report. */
 interface WatchSub {
   push: (update: Record<string, unknown>) => void;
@@ -195,6 +212,10 @@ export class Runtime {
   stats: FrameStats = emptyStats();
   onFrame?: () => void;
   onLocation?: (value: Record<string, unknown>) => void;
+  /** Learning: the shell sets this to collect how an app is used. */
+  onInteraction?: (app: string, e: Interaction) => void;
+  /** The runtime this one is embedded in, if any; events bubble up through it. */
+  parent: Runtime | null = null;
   snapshot(): Record<string, unknown> { return Object.fromEntries([...this.signals].map(([k, v]) => [k, v.peek()])); }
   onStats?: (s: FrameStats) => void;
 
@@ -412,9 +433,21 @@ export class Runtime {
     const h = this.handlers.get(id);
     if (!h) return;
     // Actions run sequentially without batching, so each one sees the state the previous one wrote.
+    // What the interaction records is captured before the actions run: a handler may navigate,
+    // relabel the node or turn its `secure` off. Sensitive nodes record no label or value.
     {
-      if (name === "tap" && h.onTap) this.run(h.onTap, h.scope);
-      if (name === "link" && h.onLink) this.run(h.onLink, childScope(h.scope, { value: String(payload.url ?? "") }));
+      const screen = this.nav.peek().at(-1)?.screen ?? "";
+      const path = node.path ?? "";
+      const sensitive = sensitiveNode(node, h.bind, this.secretKeys);
+      const seen = sensitive ? { node, screen, path } : { node, screen, path, label: interactionLabel(node) };
+      if (name === "tap" && h.onTap) {
+        this.run(h.onTap, h.scope);
+        this.interact("tap", seen);
+      }
+      if (name === "link" && h.onLink) {
+        this.run(h.onLink, childScope(h.scope, { value: String(payload.url ?? "") }));
+        this.interact("link", sensitive ? seen : { ...seen, value: String(payload.url ?? "").slice(0, 120) });
+      }
       if (name === "change") {
         let value: unknown = payload.value;
         if (node.type === "slider") {
@@ -425,11 +458,21 @@ export class Runtime {
         node.props.value = value;
         if (h.bind) this.assign(h.bind, h.scope, coerce(value, this.peekPath(h.bind, h.scope)));
         if (h.onChange) this.run(h.onChange, childScope(h.scope, { value }));
+        if (h.bind || h.onChange) {
+          this.interact("change", sensitive ? seen : { ...seen, ...changeValue(node, value, h.bind ? bindRoot(h.bind) : null, this.secretKeys) });
+        }
       }
       if (name === "ended" && h.onEnded) this.run(h.onEnded, childScope(h.scope, { value: payload }));
       if (name === "time" && h.onTime) this.run(h.onTime, childScope(h.scope, { value: payload }));
-      if (name === "submit" && h.onSubmit) this.run(h.onSubmit, h.scope);
-      if (name === "page" && h.onPage) this.run(h.onPage, childScope(h.scope, { value: Number(payload.index) || 0 }));
+      if (name === "submit" && h.onSubmit) {
+        this.run(h.onSubmit, h.scope);
+        this.interact("submit", seen);
+      }
+      if (name === "page" && h.onPage) {
+        const index = Number(payload.index) || 0;
+        this.run(h.onPage, childScope(h.scope, { value: index }));
+        this.interact("page", sensitive ? seen : { ...seen, value: index });
+      }
       if (name === "swipe" && h.onSwipe) h.onSwipe(Number(payload.index) || 0);
       if (name === "move" && h.onMove) h.onMove(Math.sign(Number(payload.by) || 0));
     }
@@ -444,6 +487,7 @@ export class Runtime {
     for (const e of [...this.embeds].reverse()) if (e.interactive && e.node.mounted && e.rt.back()) return true;
     const stack = this.nav.peek();
     if (stack.length <= 1) return false;
+    this.interact("back", { path: "", type: "" });
     this.nav.set(stack.slice(0, -1));
     return true;
   }
@@ -1241,6 +1285,7 @@ export class Runtime {
       log: this.host.log && ((level, message) => this.host.log!(level, message)),
     };
     e.rt = new Runtime(child, { embedded: true, gate: this.gate });
+    e.rt.parent = this;
     e.rt.colorScheme = this.colorScheme;
     if (spec.onSelect) e.rt.onSelect = (info) => this.run(spec.onSelect as Actions, childScope(scope, { value: info }));
     this.embeds.add(e);
@@ -1675,7 +1720,11 @@ export class Runtime {
       if (swipe.length) {
         h.onSwipe = (n) => {
           const a = swipe[n];
+          const screen = this.nav.peek().at(-1)?.screen ?? "";
+          const path = node.path ?? "";
           if (a?.do) this.run(a.do, scope);
+          if (sensitiveNode(node, undefined, this.secretKeys)) this.interact("swipe", { node, screen, path });
+          else this.interact("swipe", { node, screen, path, label: interactionLabel(node), detail: str(this.evalTemplate(a?.label ?? "", scope, `${L.where}.swipe[${n}].label`) ?? "").slice(0, 120) });
         };
         effect(() => {
           const actions = swipe.map((a, n) => {
@@ -1687,7 +1736,13 @@ export class Runtime {
       }
       if (spec.reorder) {
         node.props.reorder = true;
-        h.onMove = (by) => this.moveListItem(L, index.peek(), by);
+        h.onMove = (by) => {
+          const screen = this.nav.peek().at(-1)?.screen ?? "";
+          const path = node.path ?? "";
+          this.moveListItem(L, index.peek(), by);
+          if (sensitiveNode(node, undefined, this.secretKeys)) this.interact("move", { node, screen, path });
+          else this.interact("move", { node, screen, path, label: interactionLabel(node), value: by });
+        };
       }
       this.handlers.set(node.id, h);
       return { key, item, index, node, dispose };
@@ -2124,6 +2179,40 @@ export class Runtime {
   /** Records a runtime error from a live source (which lives outside the class). */
   recordError(where: string, message: string): void {
     this.error(where, message);
+    this.interact("error", { detail: String(message).slice(0, 120) });
+  }
+
+  /** Reports an interaction to the shell: one's own `onInteraction`, else up through the parent. */
+  private interact(kind: Interaction["kind"], opts: { node?: ViewNode; path?: string; type?: string; screen?: string; label?: string; value?: string | number | boolean; detail?: string } = {}): void {
+    if (!this.onInteraction && !this.parent) return;
+    const screen = opts.screen ?? this.nav.peek().at(-1)?.screen ?? "";
+    const e: Interaction = { t: Date.now(), kind, screen, path: opts.path ?? opts.node?.path ?? "", type: opts.type ?? opts.node?.type ?? "" };
+    if (opts.label !== undefined) e.label = opts.label;
+    if (opts.value !== undefined) e.value = opts.value;
+    if (opts.detail !== undefined) e.detail = opts.detail;
+    const app = this.spec?.id ?? "";
+    if (this.onInteraction) {
+      try {
+        this.onInteraction(app, e);
+      } catch {
+        // Reporting never fails the app.
+      }
+      return;
+    }
+    this.parent?.bubble(app, e);
+  }
+
+  /** An embedded child's event, forwarded up (intermediate containers only forward). */
+  private bubble(app: string, e: Interaction): void {
+    if (this.onInteraction) {
+      try {
+        this.onInteraction(app, e);
+      } catch {
+        // Reporting never fails the app.
+      }
+      return;
+    }
+    this.parent?.bubble(app, e);
   }
 
   run(actions: Actions, scope: Scope): void {
@@ -2169,6 +2258,7 @@ export class Runtime {
         for (const [k, v] of Object.entries(nv.params ?? {})) params[k] = this.evalValue(v, scope, where);
         if (!this.spec.screens[nv.navigate]) return this.error(where, `Unknown screen '${nv.navigate}'`);
         if (this.pinned) return;
+        this.interact("navigate", { detail: String(nv.navigate).slice(0, 120), path: "", type: "" });
         this.nav.set([...this.nav.peek(), { screen: nv.navigate, params, transition: nv.transition }]);
       } else if ("back" in a) {
         this.back();
@@ -2879,6 +2969,42 @@ export function customTreeErrors(tree: unknown, components?: Record<string, Node
 
 /** Async actions that carry the app's id to the host's per-app file store. */
 const FILE_ACTIONS = new Set(["pickFile", "pickPhoto", "takePhoto", "share", "readFile", "deleteFile"]);
+
+/** What a node says: its label or placeholder, at most 60 characters, never the typed value. */
+function interactionLabel(node: ViewNode): string | undefined {
+  const v = node.props.label ?? node.props.placeholder;
+  if (v == null) return undefined;
+  return str(v).slice(0, 60);
+}
+
+/** Whether the node keeps a secret: a `secure` field, or one bound to a `secret` key. */
+function sensitiveNode(node: ViewNode, bind: string | undefined, secrets: Set<string>): boolean {
+  if (node.props.secure === true) return true;
+  if (bind) {
+    const root = bindRoot(bind);
+    if (root && secrets.has(root)) return true;
+  }
+  return false;
+}
+
+/** A change's recorded value: numbers and booleans as they are, text as its first
+ * 40 characters. Nothing for a `secure` text field, or a field bound to a `secret` key. */
+function changeValue(node: ViewNode, value: unknown, bindRootName: string | null, secrets: Set<string>): { value?: string | number | boolean } {
+  if (node.props.secure === true) return {};
+  if (bindRootName && secrets.has(bindRootName)) return {};
+  if (typeof value === "number" && Number.isFinite(value)) return { value };
+  if (typeof value === "boolean") return { value };
+  return { value: str(value ?? "").slice(0, 40) };
+}
+
+/** The root name a bind path writes (`draft` of `draft`, `chore` of `chore.done`). */
+function bindRoot(path: string): string | null {
+  try {
+    return compilePath(path).root;
+  } catch {
+    return null;
+  }
+}
 
 /** A file handle's id, whether passed as a handle `{id}` or a bare id string. */
 function fileIdOf(file: unknown): string | null {

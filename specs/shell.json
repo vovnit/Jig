@@ -47,7 +47,8 @@
     "selecting": false,
     "recording": false,
     "status": "",
-    "asking": null
+    "asking": null,
+    "learning": null
   },
   "start": "home",
   "screens": {
@@ -59,6 +60,54 @@
           "gap": 16
         },
         "children": [
+          {
+            "type": "column",
+            "if": "learning",
+            "style": {
+              "background": "surface",
+              "radius": 12,
+              "padding": 12,
+              "gap": 8
+            },
+            "children": [
+              {
+                "type": "text",
+                "variant": "callout",
+                "value": "{{learning.status == 'working' ? 'Learning from ' + learning.appName + '…' : (learning.status == 'changed' ? learning.appName + ': ' + learning.text : (learning.status == 'unchanged' ? (learning.text ? learning.text : learning.appName + ': nothing to change yet.') : 'Couldn’t learn from ' + learning.appName + ': ' + learning.text))}}"
+              },
+              {
+                "type": "row",
+                "style": {
+                  "gap": 8,
+                  "justify": "end"
+                },
+                "children": [
+                  {
+                    "type": "button",
+                    "variant": "secondary",
+                    "if": "learning.status == 'changed'",
+                    "label": "Undo",
+                    "onTap": {
+                      "call": "builder.learnUndo",
+                      "args": {
+                        "id": "learning.id",
+                        "at": "learning.at"
+                      }
+                    }
+                  },
+                  {
+                    "type": "button",
+                    "if": "learning.status != 'working'",
+                    "label": "OK",
+                    "onTap": {
+                      "set": "learning",
+                      "to": "null"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
           {
             "type": "list",
             "items": "apps",
@@ -109,6 +158,16 @@
                     }
                   }
                 ]
+              },
+              {
+                "label": "Learning",
+                "color": "accent",
+                "do": {
+                  "navigate": "learn",
+                  "params": {
+                    "id": "app.id"
+                  }
+                }
               },
               {
                 "label": "New icon",
@@ -175,6 +234,15 @@
                       "variant": "caption",
                       "if": "app.spec.description",
                       "value": "{{app.spec.description}}"
+                    },
+                    {
+                      "type": "text",
+                      "variant": "caption",
+                      "if": "app.learning",
+                      "value": "Learning",
+                      "style": {
+                        "color": "accent"
+                      }
                     }
                   ]
                 }
@@ -228,6 +296,16 @@
               "gap": 8
             },
             "children": [
+              {
+                "type": "text",
+                "variant": "caption",
+                "if": "find(apps, a => a.id == params.id).learning",
+                "value": "Learning",
+                "style": {
+                  "alignSelf": "center",
+                  "color": "muted"
+                }
+              },
               {
                 "type": "button",
                 "variant": "secondary",
@@ -286,6 +364,133 @@
           {
             "type": "PermissionAsk",
             "if": "asking"
+          }
+        ]
+      }
+    },
+    "learn": {
+      "title": "{{find(apps, a => a.id == params.id).spec.name ?? 'Learn'}}",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 8
+        },
+        "children": [
+          {
+            "type": "row",
+            "style": {
+              "gap": 8,
+              "align": "center"
+            },
+            "children": [
+              {
+                "type": "text",
+                "value": "Learn from how I use it",
+                "style": {
+                  "grow": 1
+                }
+              },
+              {
+                "type": "toggle",
+                "value": "{{find(apps, a => a.id == params.id).learning ?? false}}",
+                "onChange": {
+                  "call": "builder.setLearning",
+                  "args": {
+                    "id": "params.id",
+                    "on": "value"
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "type": "text",
+            "variant": "callout",
+            "value": "While it learns, Jig records what you tap and type in this app. When you leave the app, Meta's model looks at that record, using your API key, and may make one small change to fit how you use it. Every change is listed here and can be undone.",
+            "style": {
+              "color": "muted"
+            }
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "if": "!apiKey",
+            "value": "Add a Meta Model API key in Settings first."
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "if": "len(find(apps, a => a.id == params.id).lessons ?? []) > 0",
+            "value": "What it changed",
+            "style": {
+              "marginTop": 16
+            }
+          },
+          {
+            "type": "list",
+            "variant": "plain",
+            "separators": false,
+            "if": "len(find(apps, a => a.id == params.id).lessons ?? []) > 0",
+            "items": "reverse(find(apps, a => a.id == params.id).lessons ?? [])",
+            "as": "lesson",
+            "row": {
+              "type": "row",
+              "style": {
+                "gap": 8,
+                "align": "center"
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "value": "{{formatDate(lesson.at, 'MMM d') + ': ' + lesson.text + (lesson.undone ? ' (undone)' : '')}}",
+                  "style": {
+                    "grow": 1
+                  }
+                },
+                {
+                  "type": "button",
+                  "variant": "secondary",
+                  "if": "!lesson.undone && lesson.at == max(map(filter(find(apps, a => a.id == params.id).lessons ?? [], l => !l.undone), l => l.at))",
+                  "label": "Undo",
+                  "onTap": {
+                    "call": "builder.learnUndo",
+                    "args": {
+                      "id": "params.id",
+                      "at": "lesson.at"
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "if": "find(apps, a => a.id == params.id).learnNotes",
+            "value": "What it noticed",
+            "style": {
+              "marginTop": 16
+            }
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "if": "find(apps, a => a.id == params.id).learnNotes",
+            "value": "{{find(apps, a => a.id == params.id).learnNotes}}"
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Forget what it learned",
+            "style": {
+              "marginTop": 16
+            },
+            "onTap": {
+              "call": "builder.forgetLearning",
+              "args": {
+                "id": "params.id"
+              }
+            }
           }
         ]
       }

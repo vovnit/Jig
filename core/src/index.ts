@@ -4,15 +4,16 @@ export { seedApps, updateApp, runningApp, commitEdit, undoEdit, redoEdit } from 
 export { installBuilder } from "./builder/index.ts";
 export { validateSpec } from "./builder/validate.ts";
 export { applyPatch } from "./builder/patch.ts";
-export type { AppEntry } from "./builder/registry.ts";
+export type { AppEntry, Lesson } from "./builder/registry.ts";
 export { DataStore } from "./store.ts";
-export type { FrameStats, RuntimeError } from "./runtime.ts";
+export type { FrameStats } from "./runtime.ts";
 export type { Host, Op, Props, Size, Database, SecretStore, SqlValue, Statement, TextMeasureStyle, HostEvent } from "./bridge.ts";
 export type { TextSpanStyle } from "./bridge.ts";
 export type { AppSpec, NodeSpec, ListSpec, ScreenSpec, FieldSpec, PublishSpec, Action, Actions, ColorScheme, ScreenTransition, ValueTransition, WidgetSpec, WidgetSizeName, ScriptSpec, LibrarySpec } from "./spec.ts";
 export { DEFAULT_THEME, DARK_THEME, TYPOGRAPHY, FONT_FAMILY, resolveTheme, WIDGET_SIZES } from "./spec.ts";
 export { CAPABILITIES, ASYNC_ACTIONS, registerAsyncAction, unregisterAsyncAction } from "./spec.ts";
 export type { CapabilityInfo, AsyncActionInfo } from "./spec.ts";
+export type { Interaction, RuntimeError } from "./runtime.ts";
 export { SHAPES, BUILTIN_COMPONENTS } from "./builtins.ts";
 export { compile, compileTemplate, evaluate, freeIdentifiers, BUILTINS } from "./expr.ts";
 
@@ -24,6 +25,9 @@ export type { XmlNode, XmlElement, XmlText } from "./xml.ts";
 export { openEpub, readEpubChapter, readEpubImage, resolveHref } from "./epub.ts";
 export type { ZipSource, EpubBook, EpubChapter, EpubSpan, EpubBlockKind, EpubBlock } from "./epub.ts";
 export { installVision, parseSamBoxes, samText } from "./vision.ts";
+export { installAi, parseJsonAnswer } from "./ai.ts";
+export { runLearn, formatEvents, summarizeData, learnGuard } from "./builder/learn.ts";
+export type { LearnOutcome, LearningState } from "./builder/learn.ts";
 export { sha256Hex } from "./sha256.ts";
 export { libraryUrlError, networkHostError } from "./builder/validate.ts";
 export type { FoundBox, FoundObject } from "./vision.ts";

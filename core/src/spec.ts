@@ -404,6 +404,7 @@ export const CAPABILITIES: Record<string, CapabilityInfo> = {
   photos: { doc: "use photos you choose", asks: false },
   camera: { doc: "take photos", asks: true },
   vision: { doc: "send a photo to Meta's model to find things in it", asks: true },
+  ai: { doc: "ask Meta's model, using your API key", asks: true },
   network: { doc: "connect to the listed hosts from custom code", asks: true },
   share: { doc: "share things you choose", asks: false },
 };
@@ -438,6 +439,7 @@ export const ASYNC_ACTIONS: Record<string, AsyncActionInfo> = {
   readFile: { capability: "files", doc: "read a file as text or base64", args: { file: "any", as: ["text", "base64"] }, result: "the file's text or base64" },
   deleteFile: { capability: "files", doc: "delete a file from the app's store", args: { file: "any" }, result: "{}" },
   findObjects: { capability: "vision", doc: "send a photo to Meta's model to find things in it", args: { photo: "any", prompts: "any" }, result: "{counts: {prompt: number}, objects: [{label, x, y, width, height}]}" },
+  ask: { capability: "ai", doc: "ask Meta's model, using your API key", args: { prompt: "text", system: "text", history: "any", images: "any", schema: "any", into: "string", effort: ["minimal", "low", "medium", "high"], maxTokens: "number" }, result: "the answer's text, or the parsed object when schema is given" },
 };
 
 /** Registers an async action and its capability (for tests; phases add real ones above). */

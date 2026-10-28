@@ -201,7 +201,8 @@ test("a failed draw keeps the letter tile and logs once", async () => {
 test("the shell shows the icon when there is one, and offers a new one", () => {
   const shell = JSON.parse(readFileSync(new URL("../../specs/shell.json", import.meta.url), "utf8")) as AppSpec;
   assert.equal((shell.data?.icons as { default?: unknown })?.default, true);
-  const row = JSON.stringify((shell.screens.home.body as { children?: unknown[] }).children?.[0]);
+  const home = (shell.screens.home.body as { children?: { items?: string }[] }).children ?? [];
+  const row = JSON.stringify(home.find((c) => c.items === "apps"));
   assert.match(row, /"if":"app\.icon"/, "the image shows only with an icon");
   assert.match(row, /"if":"!app\.icon"/, "the letter tile stays otherwise");
   assert.match(JSON.stringify(shell.screens.home.body), /builder\.icon/);

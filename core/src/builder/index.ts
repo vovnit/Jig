@@ -7,9 +7,11 @@ import type { AppSpec } from "../spec.ts";
 import { formatCollections } from "../shared.ts";
 import { CAPABILITIES } from "../spec.ts";
 import { installVision } from "../vision.ts";
+import { installAi } from "../ai.ts";
 import { type AgentDeps, type BuilderView, type EditRequest, type LogEntry, runEdit } from "./agent.ts";
 import { addApp, commitEdit, findApp, redoEdit, undoEdit } from "./registry.ts";
 import { installIcons, requestIcon } from "./icons.ts";
+import { installLearn } from "./learn.ts";
 
 export function installBuilder(shell: Runtime): void {
   let nextLog = 1;
@@ -149,6 +151,8 @@ export function installBuilder(shell: Runtime): void {
   installGate(shell);
   installBackground(shell);
   installVision(shell);
+  installAi(shell);
+  installLearn(shell);
   installIcons(shell);
 }
 

@@ -51,9 +51,12 @@ The `ask` container service lives in `core/src/ai.ts`, installed by `installBuil
   - The running app is the app runtime with that id, among the shell's embedded runtimes at any depth.
   - If `into` isn't one of the app's `state` keys, the call fails before it starts with "`into` must be one of the app's state keys".
   - Reasoning events are ignored.
+  - `response.failed`, `error` and `response.incomplete` events fail the call with the API's message ("The model stopped: <reason>" for incomplete). An empty answer fails with "The model gave no answer".
   - A host that can't stream answers with the whole body; read it the same way the agent does (`readResponseBody`-style).
 - **Schema:**
-  - The request adds `text: {format: {type: "json_schema", name: "answer", schema, strict: false}}`, and the instructions end with "Answer only with JSON that matches the schema."
+  - The request adds `text: {format: {type: "json_schema", name: "answer", schema, strict: true}}`, and the instructions end with "Answer only with JSON that matches the schema."
+  - The schema is made strict first: every object with `properties` gets `additionalProperties: false` and `required` listing all of its properties, recursively, including array `items`. Muse's API requires this for `strict: true`, and its non-strict schema output garbles keys (tested: `"color VR": "red"`).
+  - If the API refuses the schema (a 400 whose message mentions the schema), the request is retried once without `text`, with the schema's JSON appended to the instructions instead.
   - The answer is parsed with `JSON.parse` after stripping a surrounding ```` ```json ```` fence.
   - If it doesn't parse, the call fails with "The model's answer wasn't valid JSON".
 - **Limits** (failures go to `else`):
@@ -64,7 +67,7 @@ The `ask` container service lives in `core/src/ai.ts`, installed by `installBuil
 - **HTTP errors:**
   - A 401 is reported as "The API key was refused".
   - Any other non-2xx is reported as "The model answered <status>", with the API's `error.message` when the body has one.
-- **Privacy:** the service never puts the key into the app's state, `value` or `error`.
+- **Privacy:** the service never puts the key into the app's state, `value` or `error`: every error message from `ask` (and from host-call rejections it forwards) has the API key replaced with "…" first.
 
 ### The builder
 
@@ -87,7 +90,7 @@ The `ask` container service lives in `core/src/ai.ts`, installed by `installBuil
     - a row with a photo button (`pickPhoto`), a text field bound to `input` and a Send button (disabled while `busy` or the input is empty);
     - a muted caption with `problem` when it's set.
   - Send adds the user message, clears the input and the photo, sets `busy`, and calls `ask` with `history` (the earlier messages), `images` (the photo, if any) and `into: "draft"`. `then` adds the model message and clears `busy` and `draft`; `else` sets `problem` and clears `busy`.
-- **Settings screen** (from a header button): a multiline text field for `persona`, used as `system`, and Clear conversation.
+- **Settings screen** (from a header button): a single-line text field for `persona`, used as `system`, and Clear conversation.
 - Seed it the way `converter.json` is seeded.
 
 ## Learning
@@ -123,7 +126,7 @@ interface Interaction {
   path: string;
   /** node type */
   type: string;
-  /** what the node says: a label, text value or placeholder, at most 60 characters */
+  /** what the node says: a label or placeholder, at most 60 characters (never the typed value) */
   label?: string;
   value?: string | number | boolean;
   /** the target screen, the swipe action's label, or the error message, at most 120 characters */
@@ -135,9 +138,10 @@ What to record:
 
 - **`dispatch`:** records `tap`, `change`, `submit`, `swipe`, `page`, `link` and `move` for nodes that have the matching handler.
 - **`change` values:**
+  - A `change` event's `label` is the field's label, then its placeholder; otherwise it is left out. It is never the typed value.
   - Numbers and booleans are recorded as they are.
   - Text is recorded as its first 40 characters.
-  - Nothing is recorded for a `secure` text field, or for a field bound to a `secret` data key.
+  - Nothing is recorded for a `secure` text field, or for a field bound to a `secret` data key: neither the value nor anything derived from it.
 - **Navigation:** `navigate` actions record `navigate` with the target screen in `detail`. `back()` on the app records `back`.
 - **Errors:** `recordError` records `error`.
 
@@ -167,7 +171,7 @@ Otherwise the events wait for a later session.
   - the notes;
   - the lessons, with undone ones marked;
   - the events, compacted: consecutive identical `kind`/`path`/`value` entries merge into one with `×n`, and each line reads like `+12s main tap button "Add" [screens.main.body.children[3]]`.
-- **Commits** go through `commitEdit`, so the builder's Undo works too.
+- **Commits** go through `commitEdit`, so the builder's Undo works too. Patches apply to a working copy of the spec the run started with, so the whole run is one history entry and one lesson, and one Undo reverses it all. It commits once, at `finish`, and only if the app's current spec is still the one it started from. Otherwise it commits nothing, keeps the events it took, and the status is `unchanged` with the text "<App> changed while learning; it will look again next time."
 - **Guard:** a learning commit is refused, and the errors go back to the model as the tool result, when compared with the spec before the run it would:
   - add capabilities, scripts, libraries, `network`, publish or shared;
   - remove a data key or change a data key's kind;
@@ -176,7 +180,7 @@ Otherwise the events wait for a later session.
 - **After `finish`, or after running out of steps** (treated as finishing with no change and the old notes):
   - save the notes (cut to 2,000 characters);
   - add the lesson when `change` isn't empty and a commit happened;
-  - clear `learnEvents`;
+  - remove only the events the run was given (sessions that end while a run is in progress append more, which wait for the next run);
   - set `learning`.
 - **On error:** the events are kept and the status is `error` with the message.
 
@@ -202,32 +206,37 @@ The system prompt for the run:
   - `unchanged`: "<App>: nothing to change yet.", with OK.
   - `error`: "Couldn't learn from <App>: <text>", with OK.
 - **OK** clears `learning`.
-- **Undo** calls `builder.learnUndo {id}`:
-  - If the app's spec is still the one learning committed (keep its JSON with the lesson in memory, or a hash of it), it calls `undoEdit`, marks the lesson `undone`, and appends "The person undid: <text>" to the notes.
-  - Otherwise it sets the card's text to "<App> has changed since; undo it in the builder."
-- **The `learn` screen** gets an Undo for each lesson that isn't undone. It does the same, and only for the newest lesson.
+- **Undo** calls `builder.learnUndo {id, at}`:
+  - Only the newest lesson that isn't undone gets an Undo, on the learn screen and on the card.
+  - If `at` isn't that lesson, or the app's spec is no longer the one learning committed (keep its JSON with the lesson in memory, or a hash of it), it refuses with "<App> has changed since; undo it in the builder."
+  - Otherwise it calls `undoEdit`, marks the lesson `undone`, and appends "The person undid: <text>" to the notes (dropping text from the start of the old notes past 2,000 characters, so the undo line is always kept).
+- **The `learn` screen** shows an Undo only for that newest lesson.
 
 ## Tests
 
 - **`ask`, against a fake `http`:**
-  - the request shape: instructions, history roles, images as data URLs, schema format;
+  - the request shape: instructions, history roles, images as data URLs, strict schema format;
+  - `strictSchema` on a nested schema; the fallback retry on a schema 400;
   - `into` streams into the running app's state;
   - schema answers parsed, and bad JSON goes to `else`;
+  - failed, error and incomplete streams fail with the API's message; empty answers fail;
   - no key, a refused key, too many calls, too many images, and the request too long;
   - the key never shows up in the app's state or errors;
   - the gate asks once per app.
 - **Interactions:**
   - `dispatch` records taps, changes, navigation and errors with paths;
-  - secure and secret fields record no value;
+  - a `change` label is never the typed value; secure and secret fields record no value nor anything derived from it;
   - an embedded runtime's events reach the shell;
   - only a learning app's full-screen run records;
   - session end appends to `learnEvents`, capped at 400.
 - **`runLearn`, against a scripted fake model:**
-  - a patch, then `finish`, saves notes and a lesson and clears the events;
+  - a patch, then `finish`, saves notes and a lesson and removes only the events it was given;
+  - one commit per run, and one Undo reverses it all;
+  - a run the app changed under commits nothing, keeps its events, and reports unchanged;
   - `finish` with no change;
   - the guard refuses a patch that adds a capability or removes a data key;
   - running out of steps;
-  - undo marks the lesson and notes it;
+  - undo needs the newest lesson's `at` and keeps its line in long notes;
   - the trigger threshold, and no run while the builder is busy.
 - **The chat demo** validates.
 - The prompt mentions `ask`.

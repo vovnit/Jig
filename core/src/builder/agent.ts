@@ -107,7 +107,7 @@ interface ResponseItem {
   arguments?: string;
 }
 
-interface ModelResponse {
+export interface ModelResponse {
   output: ResponseItem[];
   error?: { message?: string } | null;
 }
@@ -549,9 +549,96 @@ function messageText(response: ModelResponse): string {
     .trim();
 }
 
+/** A patch the model can apply, validated the way the builder validates it. */
+export function tryPatch(current: AppSpec, patch: unknown): { next: AppSpec; unfinished: string[] } | { error: string } {
+  let next: AppSpec;
+  try {
+    next = applyPatch(current, (decoded(patch, "patch") as PatchOp[]) ?? []);
+  } catch (e) {
+    return { error: `Not applied: ${(e as Error).message}` };
+  }
+  restoreLibraryCode(current, next);
+  const { errors, unfinished } = specProblems(next);
+  if (errors.length) return { error: `Not applied, the spec has errors:\n${errors.slice(0, 12).join("\n")}` };
+  return { next, unfinished };
+}
+
+/**
+ * The Responses loop's transport, shared by the builder and learning: POSTs one
+ * step with the given instructions, feeds streamed lines to `onEvent` as they
+ * arrive, and answers with the completed response. A host that can't stream
+ * returns the whole body at once; it is read the same way.
+ */
+export async function callResponses(
+  http: AgentDeps["http"],
+  settings: ModelSettings,
+  req: { instructions: string; tools: unknown[]; input: unknown[]; effort?: string },
+  onEvent?: (e: Record<string, unknown>) => void,
+): Promise<ModelResponse> {
+  const lines: string[] = [];
+  let final: ModelResponse | null = null;
+  let failure: string | null = null;
+  const handle = (e: Record<string, unknown>) => {
+    onEvent?.(e);
+    switch (e.type) {
+      case "response.completed":
+        final = e.response as ModelResponse;
+        break;
+      case "response.failed":
+      case "response.incomplete":
+        failure = (e.response as ModelResponse | undefined)?.error?.message ?? String(e.type).replace("response.", "The response ");
+        break;
+      case "error":
+        failure = String((e as { message?: string }).message ?? "The model service failed");
+        break;
+    }
+  };
+  const onLine = (line: string) => {
+    lines.push(line);
+    if (!line.startsWith("data:")) return;
+    try {
+      handle(JSON.parse(line.slice(5)));
+    } catch {
+      // A line that isn't JSON (a keep-alive) carries nothing.
+    }
+  };
+  const res = await http(
+    {
+      url: `${settings.baseUrl.replace(/\/$/, "")}/responses`,
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
+      body: JSON.stringify({
+        model: settings.model,
+        instructions: req.instructions,
+        tools: req.tools,
+        input: req.input,
+        reasoning: req.effort ? { effort: req.effort } : { summary: "auto" },
+        stream: true,
+        store: false,
+      }),
+      stream: true,
+    },
+    onLine,
+  );
+  // A host that can't stream returns the whole body at once: read it the same way.
+  if (res.body) for (const line of res.body.split("\n")) onLine(line.replace(/\r$/, ""));
+  const text = lines.join("\n");
+  if (res.status >= 400) {
+    let message = text.slice(0, 200);
+    try {
+      message = JSON.parse(text).error?.message ?? message;
+    } catch {
+      // Not JSON: the text itself says what went wrong.
+    }
+    throw new Error(`The model service answered ${res.status}: ${message}`);
+  }
+  if (failure) throw new Error(failure);
+  if (!final) throw new Error(`The model service's answer ended early: ${text.slice(-200)}`);
+  return final;
+}
+
 /** POSTs to the Responses API and reads its stream, showing the model's progress as it comes. */
 async function respond(deps: AgentDeps, body: { tools: unknown[]; input: unknown[] }): Promise<ModelResponse> {
-  const { settings } = deps;
   const status = (text: string) => deps.status?.(text);
   status("Thinking");
   // Each reasoning summary part is a log entry, written as it streams.
@@ -560,9 +647,6 @@ async function respond(deps: AgentDeps, body: { tools: unknown[]; input: unknown
   let saying = "";
   let writing = "";
   let written = 0;
-  let final: ModelResponse | null = null;
-  let failure: string | null = null;
-  const lines: string[] = [];
 
   const onEvent = (e: Record<string, unknown>) => {
     switch (e.type) {
@@ -611,61 +695,9 @@ async function respond(deps: AgentDeps, body: { tools: unknown[]; input: unknown
         if (written > 2000 && Math.floor(written / 1000) !== Math.floor(before / 1000)) status(`${writing} · ${Math.floor(written / 1000)}k characters`);
         break;
       }
-      case "response.completed":
-        final = e.response as ModelResponse;
-        break;
-      case "response.failed":
-      case "response.incomplete":
-        failure = (e.response as ModelResponse | undefined)?.error?.message ?? String(e.type).replace("response.", "The response ");
-        break;
-      case "error":
-        failure = String((e as { message?: string }).message ?? "The model service failed");
-        break;
     }
   };
-  const onLine = (line: string) => {
-    lines.push(line);
-    if (!line.startsWith("data:")) return;
-    try {
-      onEvent(JSON.parse(line.slice(5)));
-    } catch {
-      // A line that isn't JSON (a keep-alive) carries nothing.
-    }
-  };
-
-  const res = await deps.http(
-    {
-      url: `${settings.baseUrl.replace(/\/$/, "")}/responses`,
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${settings.apiKey}` },
-      body: JSON.stringify({
-        model: settings.model,
-        instructions: systemPrompt(),
-        tools: body.tools,
-        input: body.input,
-        reasoning: { summary: "auto" },
-        stream: true,
-        store: false,
-      }),
-      stream: true,
-    },
-    onLine,
-  );
-  // A host that can't stream returns the whole body at once: read it the same way.
-  if (res.body) for (const line of res.body.split("\n")) onLine(line.replace(/\r$/, ""));
-  const text = lines.join("\n");
-  if (res.status >= 400) {
-    let message = text.slice(0, 200);
-    try {
-      message = JSON.parse(text).error?.message ?? message;
-    } catch {
-      // Not JSON: the text itself says what went wrong.
-    }
-    throw new Error(`The model service answered ${res.status}: ${message}`);
-  }
-  if (failure) throw new Error(failure);
-  if (!final) throw new Error(`The model service's answer ended early: ${text.slice(-200)}`);
-  return final;
+  return callResponses(deps.http, deps.settings, { instructions: systemPrompt(), tools: body.tools, input: body.input }, onEvent);
 }
 
 /** What was said in a WAV, word for word (empty when nothing was). */

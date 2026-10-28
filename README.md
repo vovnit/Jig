@@ -271,6 +271,8 @@ After profiling, if needed:
 - [x] Shared personal data store with permissions between apps
 - [x] Camera input with SAM 3.1
 - [x] Icons with Muse Image: a flat icon on the app's accent color, drawn for new apps, on demand, or lazily from the home list
+- [x] AI in apps: `ask` streams the model's answer into the app's state, with the key staying in the shell
+- [x] Learning: apps that learn from how they are used, with every change listed and undoable (see [docs/ai-apps.md](docs/ai-apps.md))
 
 ### Demo apps
 - [x] Water tracker
@@ -281,6 +283,7 @@ After profiling, if needed:
 - [x] EPUB reader: a library of books opened from files, each read chapter by chapter as styled text with links, the place in every book remembered
 - [x] Workout log that feeds a meal planner (shared data store demo)
 - [x] Pantry inventory from a shelf photo (SAM demo)
+- [x] Chat with Meta's model, with photos (`ask` demo)
 
 ## Plan
 

@@ -1,0 +1,299 @@
+{
+  "id": "chat",
+  "name": "Chat",
+  "description": "Talk with Meta's model, and ask about photos.",
+  "capabilities": ["ai", "photos"],
+  "data": {
+    "messages": {
+      "type": "list",
+      "fields": {
+        "role": "string",
+        "text": "string",
+        "photo": "file"
+      }
+    },
+    "persona": {
+      "type": "string",
+      "default": ""
+    }
+  },
+  "state": {
+    "input": "",
+    "draft": "",
+    "busy": false,
+    "problem": "",
+    "photo": null
+  },
+  "screens": {
+    "main": {
+      "title": "Chat",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 12
+        },
+        "children": [
+          {
+            "type": "row",
+            "style": {
+              "justify": "end"
+            },
+            "children": [
+              {
+                "type": "button",
+                "variant": "plain",
+                "label": "Settings",
+                "onTap": {
+                  "navigate": "settings"
+                }
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "items": "messages",
+            "as": "m",
+            "empty": "Say hello to start.",
+            "row": {
+              "type": "column",
+              "style": {
+                "gap": 4
+              },
+              "children": [
+                {
+                  "type": "image",
+                  "if": "m.photo",
+                  "src": "{{m.photo}}",
+                  "style": {
+                    "width": 120,
+                    "height": 120,
+                    "radius": 8,
+                    "alignSelf": "{{m.role == 'user' ? 'end' : 'start'}}"
+                  }
+                },
+                {
+                  "type": "text",
+                  "if": "m.role == 'user'",
+                  "value": "{{m.text}}",
+                  "style": {
+                    "background": "accent",
+                    "color": "onAccent",
+                    "radius": 12,
+                    "padding": 10,
+                    "alignSelf": "end"
+                  }
+                },
+                {
+                  "type": "text",
+                  "if": "m.role != 'user'",
+                  "value": "{{m.text}}",
+                  "style": {
+                    "background": "surface",
+                    "radius": 12,
+                    "padding": 10,
+                    "alignSelf": "start"
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "type": "text",
+            "if": "draft",
+            "value": "{{draft}}",
+            "style": {
+              "background": "surface",
+              "radius": 12,
+              "padding": 10,
+              "alignSelf": "start"
+            }
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "if": "problem",
+            "value": "{{problem}}"
+          }
+        ]
+      },
+      "footer": {
+        "type": "column",
+        "style": {
+          "gap": 8
+        },
+        "children": [
+          {
+            "type": "row",
+            "if": "photo",
+            "style": {
+              "gap": 8,
+              "align": "center"
+            },
+            "children": [
+              {
+                "type": "image",
+                "src": "{{photo}}",
+                "style": {
+                  "width": 64,
+                  "height": 64,
+                  "radius": 8
+                }
+              },
+              {
+                "type": "button",
+                "variant": "plain",
+                "label": "Remove",
+                "onTap": {
+                  "set": "photo",
+                  "to": "null"
+                }
+              }
+            ]
+          },
+          {
+            "type": "row",
+            "style": {
+              "gap": 8,
+              "align": "center"
+            },
+            "children": [
+              {
+                "type": "button",
+                "variant": "secondary",
+                "label": "Photo",
+                "onTap": {
+                  "pickPhoto": {},
+                  "then": {
+                    "set": "photo",
+                    "to": "value"
+                  },
+                  "else": {
+                    "set": "problem",
+                    "to": "error"
+                  }
+                }
+              },
+              {
+                "type": "textfield",
+                "placeholder": "Message",
+                "bind": "input",
+                "style": {
+                  "grow": 1
+                }
+              },
+              {
+                "type": "button",
+                "label": "Send",
+                "style": {
+                  "opacity": "{{busy || trim(input) == '' ? 0.4 : 1}}"
+                },
+                "onTap": {
+                  "if": "!busy && trim(input) != ''",
+                  "then": [
+                    {
+                      "set": "busy",
+                      "to": "true"
+                    },
+                    {
+                      "ask": {
+                        "prompt": "input",
+                        "system": "persona",
+                        "history": "slice(messages, -20)",
+                        "images": "photo",
+                        "into": "'draft'",
+                        "effort": "'low'",
+                        "maxTokens": "4000"
+                      },
+                      "then": [
+                        {
+                          "push": "messages",
+                          "value": {
+                            "role": "'model'",
+                            "text": "value"
+                          }
+                        },
+                        {
+                          "set": "draft",
+                          "to": "''"
+                        },
+                        {
+                          "set": "busy",
+                          "to": "false"
+                        }
+                      ],
+                      "else": [
+                        {
+                          "set": "problem",
+                          "to": "error"
+                        },
+                        {
+                          "set": "busy",
+                          "to": "false"
+                        }
+                      ]
+                    },
+                    {
+                      "push": "messages",
+                      "value": {
+                        "role": "'user'",
+                        "text": "input",
+                        "photo": "photo"
+                      }
+                    },
+                    {
+                      "set": "input",
+                      "to": "''"
+                    },
+                    {
+                      "set": "photo",
+                      "to": "null"
+                    },
+                    {
+                      "set": "problem",
+                      "to": "''"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    "settings": {
+      "title": "Settings",
+      "body": {
+        "type": "column",
+        "style": {
+          "gap": 12
+        },
+        "children": [
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "Persona"
+          },
+          {
+            "type": "textfield",
+            "placeholder": "A patient Spanish tutor",
+            "bind": "persona"
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "Used as the model's instructions."
+          },
+          {
+            "type": "button",
+            "variant": "secondary",
+            "label": "Clear conversation",
+            "onTap": {
+              "set": "messages",
+              "to": "[]"
+            }
+          }
+        ]
+      }
+    }
+  }
+}

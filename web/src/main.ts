@@ -9,11 +9,12 @@ import meds from "../../specs/meds.json";
 import books from "../../specs/books.json";
 import showcase from "../../specs/showcase.json";
 import converter from "../../specs/converter.json";
+import chat from "../../specs/chat.json";
 import workouts from "../../specs/workouts.json";
 import meals from "../../specs/meals.json";
 import pantry from "../../specs/pantry.json";
 
-const SEEDS = [chores, meds, showcase, water, books, workouts, meals, pantry, converter] as unknown as AppSpec[];
+const SEEDS = [chores, meds, showcase, water, books, workouts, meals, pantry, converter, chat] as unknown as AppSpec[];
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector(sel) as T;
 const surface = $<HTMLDivElement>("#surface");
