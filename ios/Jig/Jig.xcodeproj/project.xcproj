@@ -42,6 +42,7 @@
     },
     { "kind": "folder", "path": "JigTests", "target-membership": [ "JigTests" ] },
     { "kind": "folder", "path": "JigUITests", "target-membership": [ "JigUITests" ] },
+    { "kind": "group", "name": "Frameworks" },
     {
       "kind": "group",
       "name": "Products",
@@ -49,7 +50,7 @@
         { "path": "<PRODUCTS>/Jig.app", "id": "4165CF62308FC685009391C7", "type": "wrapper.application", "index": false },
         { "path": "<PRODUCTS>/JigTests.xctest", "id": "4165CF76308FC686009391C7", "type": "wrapper.cfbundle", "index": false },
         { "path": "<PRODUCTS>/JigUITests.xctest", "id": "4165CF80308FC686009391C7", "type": "wrapper.cfbundle", "index": false },
-        { "path": "<PRODUCTS>/JigWidgets.appex", "id": "5165CF76308FC686009391C7", "type": "wrapper.app-extension", "index": false },
+        { "path": "<PRODUCTS>/JigWidgets.appex", "id": "5165CF76308FC686009391C7", "type": "wrapper.app-extension", "index": false, "target-membership": [ { "build-phase": "Jig/copy/Embed Foundation Extensions", "header-preservation": "remove-on-copy" } ] },
       ],
     },
   ],
@@ -67,24 +68,9 @@
         "frameworks",
         "resources",
         {
-          "kind": "script",
-          "name": "Embed the widgets",
-          "input-paths": [
-            "$(BUILT_PRODUCTS_DIR)/JigWidgets.appex",
-          ],
-          "output-paths": [
-            "$(TARGET_BUILD_DIR)/$(PLUGINS_FOLDER_PATH)/JigWidgets.appex",
-          ],
-          "shell": "/bin/sh",
-          "script": [
-            "set -e",
-            "dest=\"$TARGET_BUILD_DIR/$PLUGINS_FOLDER_PATH\"",
-            "mkdir -p \"$dest\"",
-            "rm -rf \"$dest/JigWidgets.appex\"",
-            "cp -R \"$BUILT_PRODUCTS_DIR/JigWidgets.appex\" \"$dest/\"",
-            "codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY:--}\" --timestamp=none \"$dest/JigWidgets.appex\"",
-            "",
-          ],
+          "kind": "copy",
+          "name": "Embed Foundation Extensions",
+          "bundle-base-path": "plugins-directory",
         },
       ],
       "build-settings": {
