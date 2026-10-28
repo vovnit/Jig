@@ -358,7 +358,7 @@ final class Sandboxes: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMes
 
     // MARK: - WKNavigationDelegate
 
-    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
         // Before ready only the initial blank page may load (loadHTMLString with a nil
         // baseURL shows as about:blank); everything else, and everything after ready,
         // is denied.
