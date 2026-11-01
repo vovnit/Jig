@@ -302,8 +302,8 @@ export const NODE_TYPES: Record<string, NodeTypeInfo> = {
   text: { doc: "text, or styled spans [{text, bold, italic, color, link}] with onLink", props: { value: "text", variant: Object.keys(TYPOGRAPHY), spans: "spans", onLink: "actions" } },
   button: { doc: "a button", props: { label: "text", variant: ["primary", "secondary", "plain", "danger"] } },
   textfield: {
-    doc: "a text input; bind keeps its text",
-    props: { placeholder: "text", bind: "path", value: "text", keyboard: ["default", "number"], secure: "boolean", onChange: "actions", onSubmit: "actions" },
+    doc: "a text input; bind keeps its text; multiline wraps and grows to fit, up to 6 lines, then scrolling inside",
+    props: { placeholder: "text", bind: "path", value: "text", keyboard: ["default", "number"], secure: "boolean", multiline: "boolean", onChange: "actions", onSubmit: "actions" },
   },
   toggle: { doc: "a switch; onChange gets the new value as `value`", props: { value: "boolean", bind: "path", onChange: "actions" } },
   slider: {

@@ -99,7 +99,7 @@
       "mark": "favorites"
     },
     {
-      "wait": 3500
+      "wait": 6000
     },
     {
       "record": "stop"

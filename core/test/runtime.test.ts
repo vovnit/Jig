@@ -316,3 +316,73 @@ test("a check with bind shows the bound value and flips it on tap", () => {
   assert.equal(rt.get("done"), true);
   assert.ok(findNode(rt, (p, type) => type === "shape" && String(p.path ?? "").startsWith("M9.5")), "the tick shows");
 });
+
+test("a multiline field wraps and grows with its text, up to 6 lines", () => {
+  const words = (n: number) => Array(n).fill("word").join(" ");
+  const spec: AppSpec = {
+    id: "multi",
+    name: "Multi",
+    screens: {
+      main: {
+        body: {
+          type: "column",
+          children: [
+            { type: "textfield", multiline: true, value: words(20) },
+            { type: "textfield", multiline: true, value: words(200) },
+            { type: "textfield", multiline: true, placeholder: words(20) },
+            { type: "textfield", multiline: true, secure: true, value: words(200) },
+            { type: "textfield", value: words(200) },
+          ],
+        },
+      },
+    },
+  };
+  const { rt } = boot(spec);
+  const fields = [...rt.nodes.values()].filter((n) => n.type === "textfield" && n.alive);
+  assert.equal(fields.length, 5);
+  // The default field style pads 11 above and below; body text is 22pt a line.
+  const [few, many, holder, locked, single] = fields.map((f) => f.frame[3]);
+  assert.ok(few > 22 + 22, "a few lines are taller than one line");
+  assert.ok(many <= 6 * 22 + 22, "many lines clamp to 6 lines plus padding");
+  assert.ok(many >= few, "more text is no shorter");
+  assert.ok(holder > 22 + 22, "an empty field fits its placeholder");
+  assert.equal(locked, 22 + 22, "secure wins over multiline: a single line");
+  assert.equal(single, 22 + 22, "a single-line field is one line whatever its value");
+});
+
+test("typing in a multiline field sends a taller frame; single-line fields don't relayout", () => {
+  const words = (n: number) => Array(n).fill("word").join(" ");
+  const spec: AppSpec = {
+    id: "multitype",
+    name: "MultiType",
+    state: { draft: words(7), plain: "hi" },
+    screens: {
+      main: {
+        body: {
+          type: "column",
+          children: [
+            { type: "textfield", multiline: true, bind: "draft" },
+            { type: "textfield", bind: "plain" },
+          ],
+        },
+      },
+    },
+  };
+  const { host, rt } = boot(spec);
+  const fields = [...rt.nodes.values()].filter((n) => n.type === "textfield" && n.alive);
+  const [multi, single] = fields;
+  const before = multi.frame[3];
+  const singleBefore = single.frame[3];
+
+  rt.dispatch(multi.id, "change", { value: words(28) });
+  let ops = frame(host);
+  assert.ok(!ops.some((o) => o[0] === "update" && o[1] === multi.id), "typing is not echoed back");
+  const taller = ops.filter((o) => o[0] === "frame" && o[1] === multi.id);
+  assert.ok(taller.length > 0, "the field relayouts while typing");
+  assert.ok((taller.at(-1) as number[])[5] > before, "the new frame is taller");
+
+  rt.dispatch(single.id, "change", { value: words(28) });
+  ops = frame(host);
+  assert.ok(!ops.some((o) => o[0] === "frame" && o[1] === single.id), "a single-line field keeps its frame while typing");
+  assert.equal(single.frame[3], singleBefore);
+});

@@ -406,15 +406,18 @@ test("scrollIntoView emits a scrollTo command for a node in a scroll view", () =
       main: {
         scroll: false,
         body: {
-          type: "scroll",
-          style: { height: 200 },
+          type: "column",
           children: [{
-            type: "column",
-            children: [
-              { type: "text", value: "Top" },
-              { type: "text", value: "Pad", style: { height: 800 } },
-              { type: "text", value: "Bottom" },
-            ],
+            type: "scroll",
+            style: { height: 200 },
+            children: [{
+              type: "column",
+              children: [
+                { type: "text", value: "Top" },
+                { type: "text", value: "Pad", style: { height: 800 } },
+                { type: "text", value: "Bottom" },
+              ],
+            }],
           }],
         },
       },
@@ -430,5 +433,8 @@ test("scrollIntoView emits a scrollTo command for a node in a scroll view", () =
   const [y, animated] = (cmd as ["command", number, string, [number, boolean]])[3];
   assert.ok(y > 0 && animated === true);
   assert.equal(rt.scrollOffsets.get(scroll.id), y);
+  assert.equal(rt.scrollIntoView(target.id, 24, true), false, "already in view: no scroll");
+  const top = [...rt.nodes.values()].find((n) => n.props.value === "Top")!;
+  assert.equal(rt.scrollIntoView(top.id, 24, true), true, "scrolled out of view: back up");
   runTimers(host);
 });

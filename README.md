@@ -150,7 +150,7 @@ An app's `widgets` section lists home-screen widgets: `{"today": {"title": "Chor
 
 ### Node kinds
 
-- **Native views** (text, button, text field, toggle) become real platform widgets, so accessibility and text input come for free.
+- **Native views** (text, button, text field, toggle) become real platform widgets, so accessibility and text input come for free. A `textfield` with `"multiline": true` wraps and grows to fit its text, up to six lines, and Return still submits.
 - **Shapes:** a single shape node with a path in SVG path syntax, fill and stroke, drawn by SVG on the web and `CAShapeLayer` on iOS. Named paths such as `@star` and `@pill` ship with the runtime.
 - **Media** (image; video and audio later) are handles: JS holds an id and a source, native loads the file and reports its natural size, which triggers a relayout.
 - **Containers:** row and column stacks, overlay, scroll, and absolute positioning.

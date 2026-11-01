@@ -50,8 +50,11 @@ The submission's phone footage is scripted takes of the same scenarios on a phys
 
 ```bash
 node scripts/demo-record.mjs [scenario ...]   # → demo/out/<name>-{ios,android}.{mp4,json}
-node scripts/demo-compose.mjs [scenario ...]  # → demo/out/<name>-side-by-side.mp4 and demo/out/side-by-side.mp4
+node scripts/demo-compose.mjs --speed generating=2,editing=2 [scenario ...]  # → demo/out/side-by-side.mp4
+ELEVENLABS_API_KEY=... node scripts/demo-narrate.mjs   # → demo/out/jig-demo.mp4
 ```
+
+`--speed` plays the segments that start at those marks faster (the model building and editing), and the composer writes `side-by-side-timeline.json` with where each mark lands. The narration is `demo/narration.json`: each line is cued at a scenario's mark and voiced with ElevenLabs (cached in `demo/out/voice`); a line still talking delays the next, and the last frame is held until the last line ends.
 
 What they need: both phones unlocked and connected, the iPhone trusted and in Developer Mode, Android USB debugging on. The iPhone shows ReplayKit's "Allow screen recording" prompt at the start of each scenario; accept it so the take records. The iPhone take uses the app's screen recording (its first frame is the take's start), the Android take uses `adb screenrecord`; each side's `.json` stamps that start plus the script's marks, and the composer holds the slower side's last frame in every segment so the two halves stay in step at each mark.
 

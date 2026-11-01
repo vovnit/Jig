@@ -319,6 +319,10 @@ export function runDemo(shell: Runtime, script: DemoScript, opts?: RunDemoOption
       }
       return n;
     };
+    // A finger can only reach what's on screen: scroll a target below the fold into view first.
+    const reveal = async (id: number) => {
+      if (shell.scrollIntoView(id, 24, true)) await wait(700);
+    };
     const findApp = (rt: Runtime, app: string): Runtime | null => {
       try {
         if (rt.spec?.name === app || rt.spec?.id === app) return rt;
@@ -350,15 +354,20 @@ export function runDemo(shell: Runtime, script: DemoScript, opts?: RunDemoOption
           log({ mark: (step as { mark: string }).mark, t });
         } else if ("tap" in step) {
           const s = step as { tap: string; nth?: number; contains?: boolean };
-          shell.dispatch(tappable(await find(s.tap, s.nth ?? 0, s.contains)).id, "tap", {});
+          const target = tappable(await find(s.tap, s.nth ?? 0, s.contains));
+          await reveal(target.id);
+          shell.dispatch(target.id, "tap", {});
           await wait(pauseMs);
         } else if ("select" in step) {
           const s = step as { select: string; nth?: number; contains?: boolean };
-          shell.dispatch((await find(s.select, s.nth ?? 0, s.contains)).id, "select", {});
+          const target = await find(s.select, s.nth ?? 0, s.contains);
+          await reveal(target.id);
+          shell.dispatch(target.id, "select", {});
           await wait(pauseMs);
         } else if ("type" in step) {
           const s = step as { type: string; into: string; cps?: number; nth?: number; contains?: boolean };
           const node = await findField(s.into, s.nth ?? 0, s.contains);
+          await reveal(node.id);
           const cps = s.cps ?? 30;
           const gap = cps > 0 ? 1000 / cps : 0;
           for (let k = 1; k <= s.type.length; k++) {

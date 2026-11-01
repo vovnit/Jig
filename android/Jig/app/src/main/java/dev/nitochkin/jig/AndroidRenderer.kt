@@ -217,7 +217,7 @@ class AndroidRenderer(private val surface: JigLayout) {
     }
 
     private fun create(id: Int, type: String, props: JSONObject) {
-        val view = makeView(id, type)
+        val view = makeView(id, type, props)
         view.tag = id
         val node = Node(type, view)
         nodes[id] = node
@@ -595,7 +595,7 @@ class AndroidRenderer(private val surface: JigLayout) {
 
     // ---------- Views ----------
 
-    private fun makeView(id: Int, type: String): View = when (type) {
+    private fun makeView(id: Int, type: String, props: JSONObject = JSONObject()): View = when (type) {
         "text" -> JigTextView(context, isButton = false)
         "button" -> JigTextView(context, isButton = true).apply {
             isClickable = true
@@ -604,8 +604,18 @@ class AndroidRenderer(private val surface: JigLayout) {
         "textfield" -> EditText(context).apply {
             background = null
             includeFontPadding = false
-            gravity = Gravity.CENTER_VERTICAL
-            isSingleLine = true
+            // A multiline field wraps and grows to its frame (the runtime sizes it to
+            // fit); `secure` stays single-line. The input type stays single-line (no
+            // multi-line flag), so Return arrives as the Done action and submits.
+            if (props.optBoolean("multiline") && !props.optBoolean("secure")) {
+                gravity = Gravity.TOP or Gravity.START
+                setHorizontallyScrolling(false)
+                maxLines = 6
+                isVerticalScrollBarEnabled = true
+            } else {
+                gravity = Gravity.CENTER_VERTICAL
+                isSingleLine = true
+            }
             imeOptions = EditorInfo.IME_ACTION_DONE
             setOnEditorActionListener { _, _, _ ->
                 dispatch?.invoke(id, "submit", JSONObject())
@@ -816,6 +826,7 @@ class AndroidRenderer(private val surface: JigLayout) {
             }
             "textfield" -> {
                 val f = view as EditText
+                val multiline = p["multiline"] == true && p["secure"] != true
                 if (pad != null) f.setPadding(pad[3], pad[0], pad[1], pad[2])
                 f.setTextSize(TypedValue.COMPLEX_UNIT_PX, ((num(s["fontSize"]) ?: 17.0) * density).toFloat())
                 f.typeface = TextStyle.typeface((num(s["fontWeight"]) ?: 400.0).toInt())
@@ -834,6 +845,22 @@ class AndroidRenderer(private val surface: JigLayout) {
                     f.inputType = type
                     // A password input type switches the field to a monospace font; keep ours.
                     f.typeface = TextStyle.typeface((num(s["fontWeight"]) ?: 400.0).toInt())
+                }
+                // After the input type, which resets single-line and horizontal scrolling: a multiline
+                // field wraps instead of scrolling sideways, and the runtime grows its frame to fit.
+                // `secure` wins and stays on one line.
+                if (multiline) {
+                    if (f.isSingleLine) f.isSingleLine = false
+                    f.gravity = Gravity.TOP or Gravity.START
+                    f.setHorizontallyScrolling(false)
+                    f.maxLines = 6
+                    f.isVerticalScrollBarEnabled = true
+                    // The runtime measures lines at the style's line height; draw them the same.
+                    if (Build.VERSION.SDK_INT >= 28) f.lineHeight = ((num(s["lineHeight"]) ?: 22.0) * density).roundToInt()
+                } else if (!f.isSingleLine) {
+                    f.isSingleLine = true
+                    f.gravity = Gravity.CENTER_VERTICAL
+                    f.setHorizontallyScrolling(true)
                 }
                 // Native owns the text while the user types; only apply values from the runtime that differ.
                 val value = str(p["value"])

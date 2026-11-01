@@ -54,6 +54,13 @@
   "screens": {
     "home": {
       "title": "Apps",
+      "footer": {
+        "type": "button",
+        "label": "New app",
+        "onTap": {
+          "navigate": "new"
+        }
+      },
       "body": {
         "type": "column",
         "style": {
@@ -247,13 +254,6 @@
                   ]
                 }
               ]
-            }
-          },
-          {
-            "type": "button",
-            "label": "New app",
-            "onTap": {
-              "navigate": "new"
             }
           },
           {
@@ -523,6 +523,7 @@
           {
             "type": "textfield",
             "placeholder": "A packing list for trips, with categories",
+            "multiline": true,
             "bind": "newPrompt"
           },
           {
@@ -1165,12 +1166,13 @@
               "type": "row",
               "style": {
                 "gap": 8,
-                "align": "center"
+                "align": "end"
               },
               "children": [
                 {
                   "type": "textfield",
                   "placeholder": "{{selected ? 'Change the selected ' + selected.type : 'Describe a change'}}",
+                  "multiline": true,
                   "bind": "prompt",
                   "onSubmit": {
                     "call": "builder.edit",

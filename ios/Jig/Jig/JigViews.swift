@@ -92,6 +92,55 @@ final class JigTextField: UITextField {
     override func placeholderRect(forBounds bounds: CGRect) -> CGRect { bounds.inset(by: insets) }
 }
 
+/// A multiline text field: a UITextView that wraps and grows to its frame (the
+/// runtime sizes it to fit up to 6 lines, then it scrolls inside). Return submits
+/// instead of inserting a newline. (Named for the field, since JigTextView is the
+/// text label above.)
+final class JigMultilineTextField: UITextView {
+    var insets: UIEdgeInsets = .zero {
+        didSet {
+            textContainerInset = insets
+            setNeedsLayout()
+        }
+    }
+    /// Shown inside the insets while the text is empty.
+    let placeholderLabel = UILabel()
+
+    convenience init() {
+        self.init(frame: .zero, textContainer: nil)
+    }
+
+    override init(frame: CGRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        self.textContainer.lineFragmentPadding = 0
+        textContainerInset = .zero
+        isScrollEnabled = true
+        backgroundColor = .clear
+        font = .systemFont(ofSize: 17)
+        returnKeyType = .done
+        placeholderLabel.numberOfLines = 0
+        placeholderLabel.backgroundColor = .clear
+        placeholderLabel.textColor = .placeholderText
+        placeholderLabel.isUserInteractionEnabled = false
+        addSubview(placeholderLabel)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override var text: String! {
+        didSet { refreshPlaceholder() }
+    }
+
+    func refreshPlaceholder() {
+        placeholderLabel.isHidden = !(text?.isEmpty ?? true)
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        placeholderLabel.frame = bounds.inset(by: insets)
+    }
+}
+
 final class JigButton: UIButton {
     override var isHighlighted: Bool {
         didSet {

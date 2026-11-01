@@ -5,7 +5,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 // The compose script is plain JS outside the core package.
  // @ts-ignore
-import { commonMarks, filterComplex, planSegments } from "../../scripts/demo-compose.mjs";
+import { commonMarks, filterComplex, planSegments, timeline } from "../../scripts/demo-compose.mjs";
 
 const ios = { startedAt: 1000, marks: [{ name: "a", t: 5000 }, { name: "b", t: 9000 }, { name: "solo", t: 12000 }] };
 const and = { startedAt: 2000, marks: [{ name: "b", t: 11000 }, { name: "a", t: 6000 }] };
@@ -18,11 +18,11 @@ test("segments line up at every shared mark", () => {
   const segs = planSegments(ios, and);
   assert.equal(segs.length, 3);
   // Lead-in: each side's own length to the first mark, trimmed to the shorter.
-  assert.deepEqual(segs[0], { ios: [0, 4], and: [0, 4] });
+  assert.deepEqual(segs[0], { start: null, ios: [0, 4], and: [0, 4] });
   // Mark a→b in each side's clock.
-  assert.deepEqual(segs[1], { ios: [4, 8], and: [4, 9] });
+  assert.deepEqual(segs[1], { start: "a", ios: [4, 8], and: [4, 9] });
   // Tail runs 3 s past the last mark.
-  assert.deepEqual(segs[2], { ios: [8, 11], and: [9, 12] });
+  assert.deepEqual(segs[2], { start: "b", ios: [8, 11], and: [9, 12] });
 });
 
 test("no shared marks means no segments", () => {
@@ -35,7 +35,9 @@ test("the filter holds the shorter side and stacks iPhone left", () => {
   assert.ok(filter.includes("tpad=stop_mode=clone:stop_duration=1"), filter);
   // The lead-in matches on both sides, so it holds nothing.
   assert.ok(!filter.includes("stop_duration=0"), filter);
-  assert.ok(filter.includes("scale=-2:1920,fps=30"), filter);
+  // Constant frame rate before the trim, so a segment starting on a still screen keeps its start.
+  assert.ok(/\[0:v\]fps=30,trim=/.test(filter) && /\[1:v\]fps=30,trim=/.test(filter), filter);
+  assert.ok(filter.includes("scale=-2:1920["), filter);
   assert.ok(filter.includes("concat=n=3:v=1:a=0"), filter);
   assert.ok(filter.includes("pad=iw+40:ih"), filter);
   assert.ok(filter.includes("hstack=inputs=2[vout]"), filter);
@@ -48,7 +50,7 @@ test("each lead-in ends at its own first mark", () => {
   );
   assert.equal(first.length, 2);
   // L = min(5, 3) = 3: both lead-ins run 3 s and end at their own mark.
-  assert.deepEqual(first[0], { ios: [2, 5], and: [0, 3] });
+  assert.deepEqual(first[0], { start: null, ios: [2, 5], and: [0, 3] });
 });
 
 test("a short take holds its last frame through the 3 s tail", () => {
@@ -72,4 +74,13 @@ test("a segment ending past the recording is clamped and held", () => {
   const filter = filterComplex(segs, { ios: 2, android: 10 });
   assert.ok(filter.includes("trim=start=0:end=2"), filter);
   assert.ok(filter.includes("tpad=stop_mode=clone:stop_duration=2"), filter);
+});
+
+test("a faster segment plays sped up on both sides and shortens the timeline", () => {
+  const segs = planSegments(ios, and);
+  segs[1].speed = 2;
+  const filter = filterComplex(segs);
+  assert.equal(filter.match(/setpts=PTS\/2/g)?.length, 2, filter);
+  // Segment "a" (4 s and 5 s) at 2x lasts 2.5 s; the lead-in 4 s, the tail 3 s.
+  assert.deepEqual(timeline(segs), { duration: 9.5, marks: { a: 4, b: 6.5 } });
 });

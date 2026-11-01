@@ -1,0 +1,21 @@
+{
+  "voice": "XrExE9yKIg1WjnnlVkGX",
+  "model": "eleven_multilingual_v2",
+  "lines": [
+    { "scenario": "1-plants", "at": "home", "text": "This is Jig. Describe the app you need, and Meta's Muse Spark builds it: a native app, on iPhone and Android at once." },
+    { "scenario": "1-plants", "at": "generating", "text": "The model writes the app as a spec. Jig validates it and renders every screen, and when something fails, the model repairs it on its own." },
+    { "scenario": "1-plants", "at": "open", "text": "It runs natively. UIKit on the left, Android Views on the right, from the same spec." },
+    { "scenario": "1-plants", "at": "due", "text": "When a plant is due, it shows up here, and Jig schedules a nine a.m. reminder that fires even while the app is closed." },
+    { "scenario": "1-plants", "at": "editing", "text": "To change something, select it and say what you want. The model edits just that part, then checks a screenshot of its work." },
+    { "scenario": "1-plants", "at": "result", "text": "Due plants now stand out." },
+    { "scenario": "2-shopping", "at": "home", "text": "Apps can share data, with your permission. Here's a shopping list that reads the pantry app." },
+    { "scenario": "2-shopping", "at": "generating", "text": "This time the model also writes a small script to merge the lists, and Jig runs it in a sandbox. Every app gets storage, reminders and a shared data store for free." },
+    { "scenario": "2-shopping", "at": "open", "text": "Jig asks once before one app reads another's data. Low items come straight from the pantry, and you can add your own." },
+    { "scenario": "2-shopping", "at": "pantry", "text": "Now the pantry runs low on jars..." },
+    { "scenario": "2-shopping", "at": "shared", "text": "and the list picks it up." },
+    { "scenario": "3-dinner", "at": "home", "text": "Apps can use Meta's model too. A dinner planner: type what's in your fridge, and get three quick recipes." },
+    { "scenario": "3-dinner", "at": "built", "text": "Seconds later, it's ready." },
+    { "scenario": "3-dinner", "at": "use", "text": "The app asks Meta's model through the shell, so your API key never reaches the app." },
+    { "scenario": "3-dinner", "at": "favorites", "text": "Save the ones you like. Describe it, use it, change it. That's Jig." }
+  ]
+}

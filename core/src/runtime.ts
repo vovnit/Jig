@@ -458,6 +458,12 @@ export class Runtime {
         }
         this.nativeValues.set(id, value);
         node.props.value = value;
+        // A multiline field grows while the user types, so typing relayouts it.
+        // Single-line fields keep today's behaviour: no relayout, no echo.
+        if (this.isMultilineField(node)) {
+          node.markDirty();
+          this.scheduleFrame();
+        }
         if (h.bind) this.assign(h.bind, h.scope, coerce(value, this.peekPath(h.bind, h.scope)));
         if (h.onChange) this.run(h.onChange, childScope(h.scope, { value }));
         if (h.bind || h.onChange) {
@@ -517,16 +523,16 @@ export class Runtime {
    * Scrolls a node into view: its y within the nearest vertical scroll ancestor,
    * sent as a `scrollTo` command the host animates to.
    */
-  scrollIntoView(id: number, margin = 24): void {
+  scrollIntoView(id: number, margin = 24, ifNeeded = false): boolean {
     if (!this.nodes.has(id)) {
-      for (const e of this.embeds) if (e.rt.owns(id)) return e.rt.scrollIntoView(id, margin);
-      return;
+      for (const e of this.embeds) if (e.rt.owns(id)) return e.rt.scrollIntoView(id, margin, ifNeeded);
+      return false;
     }
     const node = this.nodes.get(id);
-    if (!node) return;
+    if (!node) return false;
     let scroll: ViewNode | null = node.parent;
     while (scroll && scroll.type !== "scroll") scroll = scroll.parent;
-    if (!scroll) return;
+    if (!scroll) return false;
     // Frames are relative to the parent, so the sum up to the scroll view is the node's y in its content.
     let y = 0;
     let cur: ViewNode | null = node;
@@ -534,10 +540,20 @@ export class Runtime {
       y += cur.frame[1];
       cur = cur.parent;
     }
-    const top = Math.max(0, y - margin);
+    const height = node.frame[3];
+    const viewport = scroll.frame[3];
+    const offset = this.scrollOffsets.get(scroll.id) ?? 0;
+    // Already in full view: leave it (a finger wouldn't scroll either).
+    if (ifNeeded && y >= offset && y + height <= offset + viewport) return false;
+    // Below the fold, `ifNeeded` brings it up to the bottom edge; otherwise it goes to the top.
+    const wanted = ifNeeded && y + height > offset + viewport ? y + height + margin - viewport : y - margin;
+    const content = scroll.children[0]?.frame[3] ?? 0;
+    const top = Math.max(0, Math.min(wanted, content - viewport));
+    if (top === offset) return false;
     this.structural.push(["command", scroll.id, "scrollTo", [top, true]]);
     this.scrollOffsets.set(scroll.id, top);
     this.scheduleFrame();
+    return true;
   }
 
   /** Runs layout and sends the batch. Hosts normally reach this through requestFrame. */
@@ -1941,10 +1957,17 @@ export class Runtime {
     return out;
   }
 
+  /** A text field that wraps and grows: `multiline` without `secure` (which wins). */
+  private isMultilineField(node: ViewNode): boolean {
+    return node.type === "textfield" && node.props.multiline === true && node.props.secure !== true;
+  }
+
   private setProp(node: ViewNode, key: string, value: unknown): void {
     if (looseSame(node.props[key], value)) return;
     node.props[key] = value;
-    if (MEASURED_PROPS.has(key) && !isContainer(node.type) && node.type !== "textfield") node.markDirty();
+    if (MEASURED_PROPS.has(key) && !isContainer(node.type) && (node.type !== "textfield" || this.isMultilineField(node))) node.markDirty();
+    // Toggling a field between single- and multi-line changes its size.
+    if (node.type === "textfield" && (key === "multiline" || key === "secure")) node.markDirty();
     if (key === "src") node.intrinsic = null;
     if (node.mounted) {
       let u = this.updates.get(node);
@@ -2082,6 +2105,15 @@ export class Runtime {
         return this.measureText(str(n.props.label), n, Infinity);
       case "textfield": {
         const ts = this.textStyles.get(n) ?? TYPOGRAPHY.body;
+        // A multiline field wraps at its content width (padding already excluded)
+        // and grows with its text: at least one line, at most 6, then scrolling
+        // inside. `secure` wins and stays a single line.
+        if (n.props.multiline === true && n.props.secure !== true) {
+          const width = Number.isFinite(maxW) ? maxW : 160;
+          const text = str(n.props.value) || str(n.props.placeholder) || " ";
+          const measured = this.measureText(text, n, width);
+          return { width, height: Math.min(Math.max(measured.height, ts.lineHeight), 6 * ts.lineHeight) };
+        }
         return { width: Math.min(maxW, 160), height: ts.lineHeight };
       }
       case "toggle":

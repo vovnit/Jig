@@ -208,7 +208,7 @@ export class DomHost implements Host {
         }
         case "command": {
           const el = this.els.get(op[1]);
-          if (op[2] === "focus") (el as HTMLInputElement | undefined)?.focus();
+          if (op[2] === "focus") (el as HTMLElement | undefined)?.focus();
           else if (op[2] === "scrollTo") {
             const [y, animated] = op[3] as [number, boolean];
             el?.scrollTo({ top: Math.max(0, y), behavior: animated ? "smooth" : "auto" });
@@ -375,10 +375,22 @@ export class DomHost implements Host {
         break;
       }
       case "textfield": {
-        const input = document.createElement("input");
+        // A multiline field wraps and grows to its frame (the runtime sizes it);
+        // Return still submits. `secure` stays a single-line input.
+        const area = props.multiline === true && props.secure !== true;
+        const input: HTMLInputElement | HTMLTextAreaElement = area ? document.createElement("textarea") : document.createElement("input");
+        if (area) {
+          input.style.resize = "none";
+          input.style.overflowY = "auto";
+        }
         input.addEventListener("input", () => this.runtime.dispatch(id, "change", { value: input.value }));
         input.addEventListener("keydown", (e) => {
-          if (e.key === "Enter") this.runtime.dispatch(id, "submit");
+          const k = e as KeyboardEvent;
+          if (k.key !== "Enter") return;
+          // One paragraph: Return submits instead of inserting a newline.
+          if (area && k.isComposing) return;
+          if (area) e.preventDefault();
+          this.runtime.dispatch(id, "submit");
         });
         el = input;
         break;
@@ -518,7 +530,7 @@ export class DomHost implements Host {
             el.dataset.value = String(v ?? "");
             if (!el.dataset.spans) this.renderText(id, el);
           } else if (type === "textfield") {
-            const input = el as HTMLInputElement;
+            const input = el as HTMLInputElement | HTMLTextAreaElement;
             if (input.value !== v) input.value = String(v ?? "");
           } else if (type === "toggle") el.setAttribute("aria-checked", String(Boolean(v)));
           else if (type === "slider") {
@@ -545,14 +557,17 @@ export class DomHost implements Host {
           else el.setAttribute("aria-label", String(v ?? ""));
           break;
         case "placeholder":
-          (el as HTMLInputElement).placeholder = String(v ?? "");
+          (el as HTMLInputElement | HTMLTextAreaElement).placeholder = String(v ?? "");
           break;
         case "keyboard":
           el.setAttribute("inputmode", v === "number" ? "decimal" : "text");
           break;
         case "secure":
-          (el as HTMLInputElement).type = v ? "password" : "text";
-          (el as HTMLInputElement).autocomplete = v ? "current-password" : "off";
+          // A textarea is never secure (it is only created without `secure`).
+          if (el instanceof HTMLInputElement) {
+            el.type = v ? "password" : "text";
+            el.autocomplete = v ? "current-password" : "off";
+          }
           break;
         case "tint":
           // The theme accent (CSS) shows unless a tint overrides it.

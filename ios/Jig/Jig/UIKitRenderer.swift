@@ -4,14 +4,14 @@ import UIKit
 
 /// The UIKit host: a "dumb" renderer that applies the runtime's ops. It creates
 /// views by type, applies props and frames, and reports events by node id.
-final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
+final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate, UITextViewDelegate {
     /// Hosts the runtime's root node (id 1).
     let surface: UIView
     var dispatch: ((Int, String, [String: Any]) -> Void)?
     var accentColor = UIColor(red: 0.23, green: 0.43, blue: 0.96, alpha: 1)
     var isDark = false
-    /// The text field being edited, kept visible above the keyboard.
-    private weak var focusedField: UITextField?
+    /// The field being edited (either kind), kept visible above the keyboard.
+    private weak var focusedField: UIView?
     /// Swipe actions and drag-to-reorder on list rows.
     private let rows = RowGestures()
 
@@ -366,7 +366,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func create(id: Int, type: String, props: [String: Any]) {
-        let view = makeView(id: id, type: type)
+        let view = makeView(id: id, type: type, props: props)
         view.tag = id
         let node = Node(type: type, view: view)
         nodes[id] = node
@@ -450,7 +450,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: - Views
 
-    private func makeView(id: Int, type: String) -> UIView {
+    private func makeView(id: Int, type: String, props: [String: Any] = [:]) -> UIView {
         switch type {
         case "text":
             let label = JigTextView()
@@ -463,6 +463,12 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             b.addAction(UIAction { [weak self] _ in self?.dispatch?(id, "tap", [:]) }, for: .touchUpInside)
             return b
         case "textfield":
+            // A multiline field wraps and grows to its frame; `secure` stays single-line.
+            if (props["multiline"] as? Bool) == true && (props["secure"] as? Bool) != true {
+                let area = JigMultilineTextField()
+                area.delegate = self
+                return area
+            }
             let f = JigTextField()
             f.borderStyle = .none
             f.addAction(UIAction { [weak self, weak f] _ in
@@ -573,28 +579,43 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             button.setAttributedTitle(NSAttributedString(string: string(p["label"]), attributes: textAttributes(s, defaultAlign: .center)), for: .normal)
             button.accessibilityLabel = string(p["label"])
         case "textfield":
-            guard let field = view as? JigTextField else { return }
-            field.insets = insets(s["padding"])
             let attrs = textAttributes(s)
-            field.font = attrs[.font] as? UIFont
-            field.textColor = attrs[.foregroundColor] as? UIColor
-            field.tintColor = accentColor
-            field.attributedPlaceholder = NSAttributedString(
-                string: string(p["placeholder"]),
-                attributes: [.font: attrs[.font] as Any, .foregroundColor: UIColor.placeholderText]
-            )
-            field.keyboardType = (p["keyboard"] as? String) == "number" ? .decimalPad : .default
-            // A secure field masks its text and keeps it out of autocorrect and the clipboard.
-            let secure = (p["secure"] as? Bool) ?? false
-            if field.isSecureTextEntry != secure {
-                field.isSecureTextEntry = secure
-                field.autocorrectionType = secure ? .no : .default
-                field.textContentType = secure ? .password : nil
-            }
-            field.keyboardAppearance = isDark ? .dark : .light
-            // Native owns the text while the user types; only apply values from the runtime that differ.
             let value = string(p["value"])
-            if field.text != value { field.text = value }
+            if let field = view as? JigTextField {
+                field.insets = insets(s["padding"])
+                field.font = attrs[.font] as? UIFont
+                field.textColor = attrs[.foregroundColor] as? UIColor
+                field.tintColor = accentColor
+                field.attributedPlaceholder = NSAttributedString(
+                    string: string(p["placeholder"]),
+                    attributes: [.font: attrs[.font] as Any, .foregroundColor: UIColor.placeholderText]
+                )
+                field.keyboardType = (p["keyboard"] as? String) == "number" ? .decimalPad : .default
+                // A secure field masks its text and keeps it out of autocorrect and the clipboard.
+                let secure = (p["secure"] as? Bool) ?? false
+                if field.isSecureTextEntry != secure {
+                    field.isSecureTextEntry = secure
+                    field.autocorrectionType = secure ? .no : .default
+                    field.textContentType = secure ? .password : nil
+                }
+                field.keyboardAppearance = isDark ? .dark : .light
+                // Native owns the text while the user types; only apply values from the runtime that differ.
+                if field.text != value { field.text = value }
+            } else if let area = view as? JigMultilineTextField {
+                area.insets = insets(s["padding"])
+                area.tintColor = accentColor
+                area.returnKeyType = .done
+                // The runtime measures with these attributes (line height included); draw with them too.
+                area.typingAttributes = attrs
+                var placeholder = attrs
+                placeholder[.foregroundColor] = UIColor.placeholderText
+                area.placeholderLabel.attributedText = NSAttributedString(string: string(p["placeholder"]), attributes: placeholder)
+                area.keyboardType = (p["keyboard"] as? String) == "number" ? .decimalPad : .default
+                area.keyboardAppearance = isDark ? .dark : .light
+                // Native owns the text while the user types; only apply values from the runtime that differ.
+                if area.text != value { area.attributedText = NSAttributedString(string: value, attributes: attrs) }
+                area.refreshPlaceholder()
+            }
         case "toggle":
             guard let toggle = view as? UISwitch else { return }
             toggle.onTintColor = accentColor
@@ -785,7 +806,7 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
         if rows.closeOpen() || CACurrentMediaTime() - rows.endedAt < 0.3 { return }
         let point = gesture.location(in: surface)
         var view = surface.hitTest(point, with: nil)
-        if !(view is UITextField) { surface.endEditing(true) }
+        if !(view is UITextField) && !(view is UITextView) { surface.endEditing(true) }
         while let v = view, v !== surface {
             // A tap on a link sends `link` from the label itself, not a `tap`.
             if let label = v as? JigTextView, label.url(at: v.convert(point, from: surface)) != nil { return }
@@ -813,6 +834,31 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
             v = current.superview
         }
         return false
+    }
+
+    // MARK: - Multiline fields
+
+    func textViewDidChange(_ textView: UITextView) {
+        (textView as? JigMultilineTextField)?.refreshPlaceholder()
+        dispatch?(textView.tag, "change", ["value": textView.text ?? ""])
+    }
+
+    func textView(_ textView: UITextView, shouldChangeTextIn range: NSRange, replacementText text: String) -> Bool {
+        // One paragraph: Return submits instead of inserting a newline.
+        if text == "\n" {
+            dispatch?(textView.tag, "submit", [:])
+            return false
+        }
+        return true
+    }
+
+    func textViewDidBeginEditing(_ textView: UITextView) {
+        focusedField = textView
+        revealFocusedField()
+    }
+
+    func textViewDidEndEditing(_ textView: UITextView) {
+        if focusedField === textView { focusedField = nil }
     }
 
     // MARK: - Images

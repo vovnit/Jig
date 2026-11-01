@@ -29,8 +29,9 @@ export function commonMarks(iosMarks, androidMarks) {
  * Splits a scenario into segments both takes play in step: a lead-in ending at
  * each side's own first mark (both sides keep the shorter lead-in length, so the
  * first marks line up), one segment per mark pair, and a tail of [TAIL_SEC] s
- * past the last mark. Each entry is `{ios: [start, end], and: [start, end]}` in
- * video seconds (`(t - startedAt)/1000`).
+ * past the last mark. Each entry is `{start, ios: [start, end], and: [start, end]}`
+ * in video seconds (`(t - startedAt)/1000`), `start` naming the mark it begins at
+ * (null for the lead-in). A `speed` set on an entry plays it faster.
  */
 export function planSegments(iosMeta, androidMeta, tailSec = TAIL_SEC) {
   const iosByName = new Map((iosMeta.marks ?? []).map((m) => [m.name, m.t]));
@@ -43,15 +44,17 @@ export function planSegments(iosMeta, androidMeta, tailSec = TAIL_SEC) {
   const firstIos = at(iosByName, iosMeta.startedAt, common[0].name);
   const firstAnd = at(andByName, androidMeta.startedAt, common[0].name);
   const leadLen = Math.min(firstIos, firstAnd);
-  segments.push({ ios: [firstIos - leadLen, firstIos], and: [firstAnd - leadLen, firstAnd] });
+  segments.push({ start: null, ios: [firstIos - leadLen, firstIos], and: [firstAnd - leadLen, firstAnd] });
   for (let k = 1; k < common.length; k++) {
     segments.push({
+      start: common[k - 1].name,
       ios: [at(iosByName, iosMeta.startedAt, common[k - 1].name), at(iosByName, iosMeta.startedAt, common[k].name)],
       and: [at(andByName, androidMeta.startedAt, common[k - 1].name), at(andByName, androidMeta.startedAt, common[k].name)],
     });
   }
   const last = common[common.length - 1].name;
   segments.push({
+    start: last,
     ios: [at(iosByName, iosMeta.startedAt, last), at(iosByName, iosMeta.startedAt, last) + tailSec],
     and: [at(andByName, androidMeta.startedAt, last), at(andByName, androidMeta.startedAt, last) + tailSec],
   });
@@ -62,7 +65,9 @@ const sec = (n) => String(Math.round(n * 1000) / 1000);
 
 /** A take's real duration in seconds from `ffprobe`, or null when unknown. */
 export function probeDuration(path) {
-  const r = spawnSync("ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path], { encoding: "utf8" });
+  // The video stream's end, not the container's: a recorder that only writes frames on
+  // change (ReplayKit) can end its frames seconds before the file does.
+  const r = spawnSync("ffprobe", ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=duration", "-of", "default=noprint_wrappers=1:nokey=1", path], { encoding: "utf8" });
   if (r.status !== 0) return null;
   const n = Number.parseFloat((r.stdout ?? "").toString().trim());
   return Number.isFinite(n) ? n : null;
@@ -83,9 +88,10 @@ export function filterComplex(segments, durations = {}) {
   const ios = [];
   const and = [];
   segments.forEach((s, i) => {
+    const speed = s.speed > 0 ? s.speed : 1;
     const dIos = s.ios[1] - s.ios[0];
     const dAnd = s.and[1] - s.and[0];
-    const longest = Math.max(dIos, dAnd);
+    const longest = Math.max(dIos, dAnd) / speed;
     for (const [labels, input, span] of [
       [ios, 0, s.ios],
       [and, 1, s.and],
@@ -106,8 +112,13 @@ export function filterComplex(segments, durations = {}) {
         trim = `trim=start=${sec(from)}:end=${sec(end)}`;
         shown = end - from;
       }
+      shown /= speed;
+      const fast = speed !== 1 ? `,setpts=PTS/${speed}` : "";
       const hold = longest - shown > 0.0005 ? `,tpad=stop_mode=clone:stop_duration=${sec(longest - shown)}` : "";
-      parts.push(`[${input}:v]${trim},setpts=PTS-STARTPTS${hold},scale=-2:${HEIGHT},fps=30[${label}]`);
+      // Constant frame rate before trimming: the recorders write frames only when the screen
+      // changes, so a segment starting on a still screen would otherwise begin at its next
+      // change and pull that side ahead.
+      parts.push(`[${input}:v]fps=30,${trim},setpts=PTS-STARTPTS${fast}${hold},fps=30,scale=-2:${HEIGHT}[${label}]`);
       labels.push(`[${label}]`);
     }
   });
@@ -118,6 +129,17 @@ export function filterComplex(segments, durations = {}) {
   return parts.join(";");
 }
 
+/** When each mark plays in the composed video, and its length, in seconds. */
+export function timeline(segments) {
+  const marks = {};
+  let t = 0;
+  for (const s of segments) {
+    if (s.start !== null && !(s.start in marks)) marks[s.start] = t;
+    t += Math.max(s.ios[1] - s.ios[0], s.and[1] - s.and[0]) / (s.speed > 0 ? s.speed : 1);
+  }
+  return { duration: t, marks };
+}
+
 function ffmpeg(args) {
   const r = spawnSync("ffmpeg", args, { stdio: "inherit", encoding: "utf8" });
   if (r.status !== 0) throw new Error(`ffmpeg ${args.join(" ")} failed`);
@@ -126,7 +148,18 @@ function ffmpeg(args) {
 const isMain = process.argv[1] === fileURLToPath(import.meta.url);
 if (isMain) {
   const scenariosDir = join(root, "demo/scenarios");
-  let scenarios = process.argv.slice(2).map((a) => a.replace(/\.json$/, ""));
+  // `--speed generating=1.5,editing=2` plays the segments starting at those marks faster.
+  const args = process.argv.slice(2);
+  const speeds = {};
+  const speedAt = args.indexOf("--speed");
+  if (speedAt >= 0) {
+    for (const pair of (args[speedAt + 1] ?? "").split(",")) {
+      const [mark, factor] = pair.split("=");
+      if (mark && Number(factor) > 0) speeds[mark] = Number(factor);
+    }
+    args.splice(speedAt, 2);
+  }
+  let scenarios = args.map((a) => a.replace(/\.json$/, ""));
   if (scenarios.length === 0) {
     scenarios = existsSync(scenariosDir)
       ? readdirSync(scenariosDir).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -".json".length)).sort()
@@ -134,6 +167,7 @@ if (isMain) {
   }
   mkdirSync(outDir, { recursive: true });
   const parts = [];
+  const timelines = [];
   for (const name of scenarios) {
     const iosMp4 = join(outDir, `${name}-ios.mp4`);
     const andMp4 = join(outDir, `${name}-android.mp4`);
@@ -143,6 +177,7 @@ if (isMain) {
     const andMeta = JSON.parse(readFileSync(join(outDir, `${name}-android.json`), "utf8"));
     const segments = planSegments(iosMeta, andMeta);
     if (segments.length === 0) throw new Error(`${name}: no shared marks in the two metadata files.`);
+    for (const seg of segments) if (seg.start !== null && speeds[seg.start]) seg.speed = speeds[seg.start];
     // The takes may end before the tail does; hold the last frame for the rest.
     const durations = {};
     const iosDur = probeDuration(iosMp4);
@@ -155,10 +190,18 @@ if (isMain) {
     segments.forEach((s, i) => {
       const dIos = s.ios[1] - s.ios[0];
       const dAnd = s.and[1] - s.and[0];
-      console.log(`  segment ${i}: ios ${sec(dIos)}s, android ${sec(dAnd)}s`);
+      console.log(`  segment ${i}${s.start ? ` (${s.start})` : ""}: ios ${sec(dIos)}s, android ${sec(dAnd)}s${s.speed ? ` at ${s.speed}x` : ""}`);
     });
     parts.push(out);
+    timelines.push({ name, ...timeline(segments) });
   }
+  // Where each scenario and its marks fall in the joined video (for narration).
+  let offset = 0;
+  for (const tl of timelines) {
+    tl.offset = offset;
+    offset += tl.duration;
+  }
+  writeFileSync(join(outDir, "side-by-side-timeline.json"), JSON.stringify(timelines, null, 2) + "\n");
   const list = join(outDir, "side-by-side.txt");
   writeFileSync(list, parts.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n") + "\n");
   const joined = join(outDir, "side-by-side.mp4");

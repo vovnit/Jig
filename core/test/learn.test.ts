@@ -821,14 +821,14 @@ test("one undo restores the spec from before a multi-patch run", async () => {
   assert.equal(JSON.stringify(findApp(rt, "a")!.spec), before, "one undo reverses the whole run");
 });
 
-test("a spec with a multiline textfield is rejected, and chat stays single-line", () => {
+test("a spec with a multiline textfield validates, and chat stays single-line", () => {
   const spec = JSON.parse(readFileSync(new URL("../../specs/chat.json", import.meta.url), "utf8")) as AppSpec;
   assert.deepEqual(validateSpec(spec), []);
   const settings = spec.screens.settings.body as { children: Record<string, unknown>[] };
   assert.ok(settings.children.every((c) => !("multiline" in c)), "the persona field stays single-line");
-  const bad = JSON.parse(JSON.stringify(spec)) as AppSpec;
-  ((bad.screens.settings.body as { children: Record<string, unknown>[] }).children[1] as Record<string, unknown>).multiline = true;
-  assert.ok(validateSpec(bad).some((e) => e.includes("multiline")), "the schema rejects the prop no renderer supports");
+  const multi = JSON.parse(JSON.stringify(spec)) as AppSpec;
+  ((multi.screens.settings.body as { children: Record<string, unknown>[] }).children[1] as Record<string, unknown>).multiline = true;
+  assert.deepEqual(validateSpec(multi), [], "every renderer supports the multiline prop");
 });
 
 test("sensitive nodes record only kind, screen, path and type, for every kind", () => {
