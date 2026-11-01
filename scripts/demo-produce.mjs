@@ -6,8 +6,9 @@
 //
 // Reads demo/captions.json (cards, sections, showcase), demo/narration.json (the
 // script), demo/out/<name>-side-by-side.mp4 and the timeline from demo-compose.mjs, and
-// writes demo/out/jig-demo.mp4 (captions burned in and as a subtitle track) and
-// demo/out/jig-demo.srt. Sections animate demo/animations/scenes.html (demo-animate.mjs)
+// writes demo/out/jig-demo.mp4 and demo/out/jig-demo.srt. Without a voice the captions
+// are burned in and carried as a subtitle track; a voiced video has neither (the .srt
+// is still written). Sections animate demo/animations/scenes.html (demo-animate.mjs)
 // and last as long as their lines need. Without --voice nothing calls a voice service:
 // each line lasts its reading time. With --voice, lines are voiced by the provider in
 // narration.json (Fish Audio with FISH_API_KEY, or ElevenLabs with ELEVENLABS_API_KEY)
@@ -152,6 +153,8 @@ for (const l of lines) {
   console.log(`${start.toFixed(1).padStart(6)} s  ${l.length.toFixed(1)} s  ${l.caption.slice(0, 60)}${late}`);
 }
 const length = Math.max(outroAt + OUTRO, free - GAP_SEC + 1.5);
+// A voiced video carries no captions; without a voice they are the narration.
+const captioned = voiced ? [] : placed;
 
 // Stills: cards, the stage furniture, chapter titles and the captions.
 const [srcW, srcH] = probe(scenes[0].video, "stream=width,height");
@@ -179,7 +182,7 @@ const jobs = [
     { text: look.labels[1], x: andX, y: PHONE_Y + PHONE_H + 26, width: andW },
   ] },
   ...scenes.map((s, j) => ({ kind: "chapter", out: join(assets, `chapter-${j}.png`), step: s.chapter.step, title: s.chapter.title, subtitle: s.chapter.subtitle, width: CAPTION.width, height: CAPTION.height })),
-  ...placed.map((p, i) => ({ kind: "subtitle", out: join(assets, `sub-${i}.png`), text: p.caption, ...(p.onStage ? SUB_STAGE : SUB_CENTER) })),
+  ...captioned.map((p, i) => ({ kind: "subtitle", out: join(assets, `sub-${i}.png`), text: p.caption, ...(p.onStage ? SUB_STAGE : SUB_CENTER) })),
 ];
 writeFileSync(join(assets, "jobs.json"), JSON.stringify(jobs));
 run("swift", [join(root, "scripts/demo-cards.swift"), join(assets, "jobs.json")]);
@@ -239,8 +242,8 @@ const stamp = (s) => {
 const srt = join(outDir, "jig-demo.srt");
 writeFileSync(srt, placed.map((p, i) => `${i + 1}\n${stamp(p.start)} --> ${stamp(p.start + p.length)}\n${p.caption}\n`).join("\n"));
 
-// The video: every part crossfaded into the next, captions on top; the voice (if any)
-// and the music under it.
+// The video: every part crossfaded into the next, captions on top unless it's voiced;
+// the voice (if any) and the music under it.
 const music = join(outDir, "music.mp3");
 const inputs = [...still(join(assets, "intro.png"), INTRO)];
 sectionClips.forEach((c) => inputs.push("-i", c));
@@ -248,14 +251,14 @@ sceneClips.forEach((c) => inputs.push("-i", c));
 inputs.push(...still(join(assets, "outro.png"), length - outroAt));
 const videoInputs = parts.length + 1;
 const subBase = videoInputs;
-placed.forEach((p, i) => inputs.push(...still(join(assets, `sub-${i}.png`), p.length)));
-const voiceBase = subBase + placed.length;
+captioned.forEach((p, i) => inputs.push(...still(join(assets, `sub-${i}.png`), p.length)));
+const voiceBase = subBase + captioned.length;
 const voices = placed.filter((p) => p.file);
 voices.forEach((p) => inputs.push("-i", p.file));
 const musicIn = existsSync(music) ? voiceBase + voices.length : -1;
 if (musicIn >= 0) inputs.push("-stream_loop", "-1", "-i", music);
 const srtIn = inputs.filter((x) => x === "-i").length;
-inputs.push("-i", srt);
+if (!voiced) inputs.push("-i", srt);
 
 const f = [];
 for (let k = 0; k < videoInputs; k++) f.push(`[${k}:v]setpts=PTS-STARTPTS,fps=30,format=yuv420p,setsar=1,settb=AVTB[p${k}]`);
@@ -264,7 +267,7 @@ for (let k = 1; k < videoInputs; k++) {
   f.push(`[${acc}][p${k}]xfade=transition=fade:duration=${FADE}:offset=${startOfPart(k).toFixed(3)}[x${k}]`);
   acc = `x${k}`;
 }
-placed.forEach((p, i) => {
+captioned.forEach((p, i) => {
   f.push(`[${subBase + i}:v]format=rgba,fade=t=in:st=0:d=0.2:alpha=1,fade=t=out:st=${Math.max(0, p.length - 0.2).toFixed(3)}:d=0.2:alpha=1,setpts=PTS-STARTPTS+${p.start.toFixed(3)}/TB[sub${i}]`);
   f.push(`[${acc}][sub${i}]overlay=0:0:eof_action=pass[c${i}]`);
   acc = `c${i}`;
@@ -291,6 +294,6 @@ if (musicIn >= 0) {
 const out = join(outDir, "jig-demo.mp4");
 console.log("Rendering the video…");
 run("ffmpeg", ["-v", "error", "-y", ...inputs, "-filter_complex", f.join(";"), "-map", "[vout]", ...audio,
-  "-map", `${srtIn}:s`, "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+  ...(voiced ? [] : ["-map", `${srtIn}:s`, "-c:s", "mov_text", "-metadata:s:s:0", "language=eng"]),
   ...encode, "-crf", "19", "-t", length.toFixed(3), "-movflags", "+faststart", out]);
-console.log(`${out} (${length.toFixed(1)} s, ${sections.length} sections, ${scenes.length} scene${scenes.length === 1 ? "" : "s"}, ${placed.length} captions${voices.length ? ", voiced" : ""}${musicIn >= 0 ? ", music" : ""})\n${srt}`);
+console.log(`${out} (${length.toFixed(1)} s, ${sections.length} sections, ${scenes.length} scene${scenes.length === 1 ? "" : "s"}, ${voiced ? `${voices.length} lines voiced, no captions` : `${placed.length} captions`}${musicIn >= 0 ? ", music" : ""})\n${srt}`);
