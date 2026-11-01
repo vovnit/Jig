@@ -292,3 +292,4 @@ After profiling, if needed:
 - **Days 7–8:** scheduler, notifications, camera input
 - **Days 9–10:** final demo apps and the demo
 - Native capabilities (media, files, time and place, alarms, widgets, documents): [docs/native-capabilities.md](docs/native-capabilities.md)
+- Demo video: three rehearsed scenarios, storyboard and recording commands in [docs/demo-video.md](docs/demo-video.md)
