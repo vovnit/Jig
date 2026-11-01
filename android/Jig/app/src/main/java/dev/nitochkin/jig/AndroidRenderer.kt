@@ -71,6 +71,8 @@ class AndroidRenderer(private val surface: JigLayout) {
         var backgroundColor = Color.TRANSPARENT
         /** Set while the runtime writes a control's value, so it isn't reported back as a change. */
         var updating = false
+        /** A text field's text as last set by the runtime or reported to it: anything else is an edit. */
+        var lastText: String? = null
         /** Set after the first render: only later changes animate. */
         var rendered = false
         var frameAnimator: ValueAnimator? = null
@@ -625,8 +627,13 @@ class AndroidRenderer(private val surface: JigLayout) {
                 override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
                 override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
                 override fun afterTextChanged(s: Editable?) {
-                    if (nodes[id]?.updating == true) return
-                    dispatch?.invoke(id, "change", JSONObject().put("value", s?.toString() ?: ""))
+                    // Only real edits: Android calls this again after a programmatic setText
+                    // (spans settling), and a late echo would put an old value back.
+                    val node = nodes[id] ?: return
+                    val text = s?.toString() ?: ""
+                    if (node.updating || text == node.lastText) return
+                    node.lastText = text
+                    dispatch?.invoke(id, "change", JSONObject().put("value", text))
                 }
             })
             setOnFocusChangeListener { v, hasFocus ->
@@ -864,6 +871,7 @@ class AndroidRenderer(private val surface: JigLayout) {
                 }
                 // Native owns the text while the user types; only apply values from the runtime that differ.
                 val value = str(p["value"])
+                node.lastText = value
                 if (f.text.toString() != value) {
                     node.updating = true
                     f.setText(value)

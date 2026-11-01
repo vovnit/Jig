@@ -1257,10 +1257,7 @@
                   "type": "overlay",
                   "style": {
                     "width": 44,
-                    "height": 44,
-                    "radius": 22,
-                    "background": "{{recording ? 'danger' : 'surface'}}",
-                    "transition": 150
+                    "height": 44
                   },
                   "onTap": {
                     "if": "recording",
@@ -1276,13 +1273,25 @@
                   },
                   "children": [
                     {
-                      "type": "shape",
-                      "path": "{{recording ? '@stop' : '@mic'}}",
-                      "fill": "{{recording ? 'onAccent' : 'accent'}}",
+                      "type": "overlay",
                       "style": {
-                        "width": 22,
-                        "height": 22
-                      }
+                        "width": 44,
+                        "height": 44,
+                        "radius": 22,
+                        "background": "{{recording ? 'danger' : 'surface'}}",
+                        "transition": 150
+                      },
+                      "children": [
+                        {
+                          "type": "shape",
+                          "path": "{{recording ? '@stop' : '@mic'}}",
+                          "fill": "{{recording ? 'onAccent' : 'accent'}}",
+                          "style": {
+                            "width": 22,
+                            "height": 22
+                          }
+                        }
+                      ]
                     }
                   ]
                 },
