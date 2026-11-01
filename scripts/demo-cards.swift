@@ -125,6 +125,48 @@ for job in jobs {
             y += text(job["title"] as! String, font(88, .bold), ink, at: CGPoint(x: 0, y: y), width: w, kern: -1, lineHeight: 96) + 28
             text(job["subtitle"] as! String, font(34, .regular), soft, at: CGPoint(x: 0, y: y), width: w * 0.92, lineHeight: 46)
         }, out)
+    case "section":
+        // A section's backdrop: the stage background with a headline and a line under it.
+        save(image(W, H) { cg in
+            background(cg)
+            text(job["title"] as! String, font(64, .bold), ink, at: CGPoint(x: 155, y: 110), width: W - 310, kern: -0.5)
+            text(job["subtitle"] as! String, font(32, .regular), soft, at: CGPoint(x: 155, y: 196), width: W - 310)
+        }, out)
+    case "tile":
+        // One capability: an SF Symbol in an accent badge, a title and a line, on a glassy card.
+        let w = CGFloat(job["width"] as! Double), h = CGFloat(job["height"] as! Double)
+        save(image(w, h) { cg in
+            let card = CGRect(x: 0, y: 0, width: w, height: h)
+            cg.setFillColor(NSColor.white.withAlphaComponent(0.07).cgColor)
+            cg.addPath(CGPath(roundedRect: card, cornerWidth: 28, cornerHeight: 28, transform: nil))
+            cg.fillPath()
+            cg.setStrokeColor(NSColor.white.withAlphaComponent(0.12).cgColor)
+            cg.setLineWidth(2)
+            cg.addPath(CGPath(roundedRect: card.insetBy(dx: 1, dy: 1), cornerWidth: 27, cornerHeight: 27, transform: nil))
+            cg.strokePath()
+            let badge = CGRect(x: 32, y: 32, width: 72, height: 72)
+            let space = CGColorSpaceCreateDeviceRGB()
+            let g = CGGradient(colorsSpace: space, colors: [accent.cgColor, NSColor(red: 0.72, green: 0.38, blue: 1, alpha: 1).cgColor] as CFArray, locations: [0, 1])!
+            cg.saveGState()
+            cg.addPath(CGPath(roundedRect: badge, cornerWidth: 20, cornerHeight: 20, transform: nil))
+            cg.clip()
+            cg.drawLinearGradient(g, start: badge.origin, end: CGPoint(x: badge.maxX, y: badge.maxY), options: [])
+            cg.restoreGState()
+            if let name = job["icon"] as? String,
+               let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 34, weight: .semibold).applying(.init(paletteColors: [.white]))) {
+                let s = symbol.size
+                let r = CGRect(x: badge.midX - s.width / 2, y: badge.midY - s.height / 2, width: s.width, height: s.height)
+                // Images draw upright in the flipped context only when flipped back locally.
+                cg.saveGState()
+                cg.translateBy(x: 0, y: r.minY * 2 + r.height)
+                cg.scaleBy(x: 1, y: -1)
+                symbol.draw(in: r)
+                cg.restoreGState()
+            }
+            let y = 128 + text(job["title"] as! String, font(34, .bold), ink, at: CGPoint(x: 32, y: 128), width: w - 64, kern: -0.3) + 8
+            text(job["text"] as! String, font(23, .regular), soft, at: CGPoint(x: 32, y: y), width: w - 64, lineHeight: 30)
+        }, out)
     case "label":
         // Platform labels under the phones, on a transparent full frame.
         save(image(W, H) { _ in

@@ -1,10 +1,82 @@
 {
-  "intro": { "title": "Jig", "subtitle": "Describe an app. Get a native one.", "footer": "Built with Muse Spark · Muse Image · SAM 3.1 on the Meta Model API" },
-  "outro": { "title": "Describe it. Use it. Change it.", "subtitle": "Native apps from a sentence, on iPhone and Android", "footer": "Jig · Meta Global AI Developer Hackathon" },
-  "labels": ["iPhone · UIKit", "Android · Views"],
+  "intro": {
+    "title": "Jig",
+    "subtitle": "Describe an app. Get a native one.",
+    "footer": "Built with Muse Spark · Muse Image · SAM 3.1 on the Meta Model API"
+  },
+  "outro": {
+    "title": "Describe it. Use it. Change it.",
+    "subtitle": "Native apps from a sentence, on iPhone and Android",
+    "footer": "Jig · Meta Global AI Developer Hackathon"
+  },
+  "labels": [
+    "iPhone · UIKit",
+    "Android · Views"
+  ],
+  "capabilities": {
+    "title": "Everything an app needs, built in",
+    "subtitle": "Every app Jig makes is a spec the container runs natively, with these for free.",
+    "duration": 20,
+    "tiles": [
+      {
+        "icon": "text.bubble.fill",
+        "title": "Say it, get an app",
+        "text": "Muse Spark writes it. Jig checks it and repairs it.",
+        "at": 1.0
+      },
+      {
+        "icon": "iphone.gen3",
+        "title": "Native everywhere",
+        "text": "UIKit, Android Views and the web, from one spec.",
+        "at": 2.4
+      },
+      {
+        "icon": "hand.point.up.left.fill",
+        "title": "Change by pointing",
+        "text": "Select any part and say what you want.",
+        "at": 3.8
+      },
+      {
+        "icon": "externaldrive.fill",
+        "title": "Storage built in",
+        "text": "On-device SQLite. Secrets in the keychain.",
+        "at": 8.3
+      },
+      {
+        "icon": "bell.badge.fill",
+        "title": "Works while closed",
+        "text": "Reminders and alarms, scheduled by the OS.",
+        "at": 9.6
+      },
+      {
+        "icon": "arrow.triangle.2.circlepath",
+        "title": "Apps that share",
+        "text": "One personal data store, with your permission.",
+        "at": 10.9
+      },
+      {
+        "icon": "sparkles",
+        "title": "AI inside apps",
+        "text": "Meta's model, one action away. Your key stays put.",
+        "at": 14.8
+      },
+      {
+        "icon": "camera.viewfinder",
+        "title": "Sees with SAM 3.1",
+        "text": "Count what's on a shelf from one photo.",
+        "at": 16.4
+      }
+    ]
+  },
+  "showcase": [
+    "1-plants"
+  ],
   "chapters": [
-    { "scenario": "1-plants", "step": "01", "title": "Say it.\nGet an app.", "subtitle": "Muse Spark turns one sentence into a native app, then changes it the same way." },
-    { "scenario": "2-shopping", "step": "02", "title": "Apps that\nshare", "subtitle": "One personal data store across your apps, with your permission." },
-    { "scenario": "3-dinner", "step": "03", "title": "AI inside", "subtitle": "Apps can ask Meta's model. Your key never leaves the shell." }
+    {
+      "scenario": "1-plants",
+      "step": "Showcase",
+      "title": "A plant app,\nin a minute",
+      "subtitle": "One sentence: built, used, reminding and changed, on both phones."
+    }
   ]
 }

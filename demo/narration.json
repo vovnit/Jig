@@ -4,14 +4,14 @@
   "settings": { "stability": 0.4, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": true },
   "lines": [
     { "at": "intro", "text": "[excited] What if you could just... describe the app you need?" },
+    { "at": "capabilities", "delay": 0.6, "text": "Jig turns a sentence into a real native app, on iPhone and Android. And you change it just by pointing." },
+    { "at": "capabilities", "delay": 6.6, "text": "Every app gets storage, reminders that work while it's closed, and data it can share with your other apps." },
+    { "at": "capabilities", "delay": 13.0, "text": "It can think with Meta's AI, and see with SAM." },
+    { "scenario": "1-plants", "at": "home", "text": "[playful] Here's one, start to finish." },
     { "scenario": "1-plants", "at": "generating", "text": "Muse Spark builds it, and checks its own work." },
     { "scenario": "1-plants", "at": "open", "text": "[delighted] A real native app. On iPhone, and Android." },
     { "scenario": "1-plants", "at": "due", "text": "It'll even remind me while it's closed." },
     { "scenario": "1-plants", "at": "select", "text": "Want a change? Point at it, and say it." },
-    { "scenario": "2-shopping", "at": "home", "text": "[playful] Apps can share, too." },
-    { "scenario": "2-shopping", "at": "pantry", "text": "My pantry runs low... and the list already knows." },
-    { "scenario": "3-dinner", "at": "home", "text": "And they can use Meta's AI." },
-    { "scenario": "3-dinner", "at": "ideas", "text": "[laughs] Dinner, sorted." },
     { "at": "outro", "text": "[warmly] Describe it. Use it. Change it. That's Jig." }
   ]
 }
