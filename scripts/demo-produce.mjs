@@ -242,6 +242,29 @@ const stamp = (s) => {
 const srt = join(outDir, "jig-demo.srt");
 writeFileSync(srt, placed.map((p, i) => `${i + 1}\n${stamp(p.start)} --> ${stamp(p.start + p.length)}\n${p.caption}\n`).join("\n"));
 
+/**
+ * A music bed `seconds` long from a short loop: copies of it overlapping by a few
+ * seconds with equal-power crossfades, since a generated loop rarely ends where it
+ * starts (level or phrase), and a hard restart is heard at every seam.
+ */
+function musicBed(loop, seconds) {
+  const XF = 2.5;
+  const [loopLen] = probe(loop, "format=duration");
+  const copies = Math.max(1, Math.ceil((seconds - XF) / (loopLen - XF)) + 1);
+  const bed = join(assets, "music-bed.wav");
+  const args = ["-v", "error", "-y"];
+  for (let i = 0; i < copies; i++) args.push("-i", loop);
+  const f = [];
+  let acc = "0:a";
+  for (let i = 1; i < copies; i++) {
+    f.push(`[${acc}][${i}:a]acrossfade=d=${XF}:c1=qsin:c2=qsin[m${i}]`);
+    acc = `m${i}`;
+  }
+  const map = copies > 1 ? ["-filter_complex", f.join(";"), "-map", `[${acc}]`] : ["-map", "0:a"];
+  run("ffmpeg", [...args, ...map, "-t", seconds.toFixed(3), "-c:a", "pcm_s16le", bed]);
+  return bed;
+}
+
 // The video: every part crossfaded into the next, captions on top unless it's voiced;
 // the voice (if any) and the music under it.
 const music = join(outDir, "music.mp3");
@@ -256,7 +279,7 @@ const voiceBase = subBase + captioned.length;
 const voices = placed.filter((p) => p.file);
 voices.forEach((p) => inputs.push("-i", p.file));
 const musicIn = existsSync(music) ? voiceBase + voices.length : -1;
-if (musicIn >= 0) inputs.push("-stream_loop", "-1", "-i", music);
+if (musicIn >= 0) inputs.push("-i", musicBed(music, length));
 const srtIn = inputs.filter((x) => x === "-i").length;
 if (!voiced) inputs.push("-i", srt);
 
