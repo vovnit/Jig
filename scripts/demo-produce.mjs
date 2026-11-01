@@ -1,21 +1,22 @@
-// Produces the finished demo video: a title card, a section of capability tiles, a
-// showcase of scenarios with both phones framed on a 16:9 stage (a chapter title each,
-// crossfaded), an end card, and an ElevenLabs voice-over.
+// Produces the finished demo video: a title card, animated how-it-works sections, a
+// showcase of scenarios with both phones framed on a 16:9 stage (a chapter title each),
+// an end card, all crossfaded, with closed captions (and, with --voice, a voice-over).
 //
-// Usage: ELEVENLABS_API_KEY=... node scripts/demo-produce.mjs
+// Usage: node scripts/demo-produce.mjs [--voice]
 //
-// Reads demo/out/<name>-side-by-side.mp4 and the timeline from scripts/demo-compose.mjs,
-// demo/narration.json and demo/captions.json, and writes demo/out/jig-demo.mp4.
-// captions.json picks the showcase scenarios and lays out the capability tiles.
-// Narration lines are cued at a scenario's mark, or "intro" / "capabilities" / "outro"
-// plus a delay; a line still talking delays the next one. Voiced lines are cached in
-// demo/out/voice by text and settings, so a rerun only voices what changed. An optional
-// demo/out/music.mp3 plays under the voice, ducking while it talks.
+// Reads demo/captions.json (cards, sections, showcase), demo/narration.json (the
+// script), demo/out/<name>-side-by-side.mp4 and the timeline from demo-compose.mjs, and
+// writes demo/out/jig-demo.mp4 (captions burned in and as a subtitle track) and
+// demo/out/jig-demo.srt. Sections animate demo/animations/scenes.html (demo-animate.mjs)
+// and last as long as their lines need. Without --voice nothing calls ElevenLabs: each
+// line lasts its reading time. With --voice (ELEVENLABS_API_KEY set) lines are voiced
+// and cached in demo/out/voice. An optional demo/out/music.mp3 plays underneath.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { animate } from "./demo-animate.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const outDir = join(root, "demo/out");
@@ -25,14 +26,16 @@ const voiceDir = join(outDir, "voice");
 const INTRO = 4;
 const OUTRO = 5;
 const FADE = 0.6;
-const GAP_SEC = 0.35;
+const GAP_SEC = 0.5;
+const READING_WPS = 2.6; // words per second a caption stays up for, without a voice
 // The stage: phones on the right, the chapter title on the left.
 const PHONE_H = 940;
 const PHONE_Y = 70;
 const RADIUS = 44;
 const CAPTION = { x: 120, y: 250, width: 660, height: 640 };
-// The capability grid: four tiles a row.
-const TILE = { width: 380, height: 280, gap: 30, top: 300 };
+// Where closed captions sit: centered under a slide, or under the chapter title on the stage.
+const SUB_CENTER = { x: 260, y: 1030, width: 1400, size: 36, align: "center" };
+const SUB_STAGE = { x: 120, y: 1010, width: 660, size: 32, align: "left" };
 
 function run(cmd, args) {
   const r = spawnSync(cmd, args, { stdio: ["ignore", "inherit", "inherit"] });
@@ -44,7 +47,14 @@ function probe(path, entries) {
   return r.stdout.trim().split("\n").map(Number);
 }
 
-async function voice(text, n, key) {
+const voiced = process.argv.includes("--voice");
+const key = process.env.ELEVENLABS_API_KEY;
+if (voiced && !key) throw new Error("--voice needs ELEVENLABS_API_KEY.");
+
+/** A caption's text: the line without its performance tags ("[excited]"). */
+const caption = (s) => s.replace(/\[[^\]]*\]\s*/g, "").trim();
+
+async function voice(text, n) {
   const id = createHash("sha256").update(JSON.stringify([n.voice, n.model, n.settings ?? null, text])).digest("hex").slice(0, 16);
   const file = join(voiceDir, `${id}.mp3`);
   if (existsSync(file)) return file;
@@ -58,15 +68,32 @@ async function voice(text, n, key) {
   return file;
 }
 
-const key = process.env.ELEVENLABS_API_KEY;
-if (!key) throw new Error("Set ELEVENLABS_API_KEY.");
 const narration = JSON.parse(readFileSync(join(root, "demo/narration.json"), "utf8"));
 const look = JSON.parse(readFileSync(join(root, "demo/captions.json"), "utf8"));
 const composed = JSON.parse(readFileSync(join(outDir, "side-by-side-timeline.json"), "utf8"));
 mkdirSync(assets, { recursive: true });
 mkdirSync(voiceDir, { recursive: true });
 
-// The showcase scenarios, back to back.
+// Every line's length: its voice, or its reading time.
+const lines = [];
+for (const line of narration.lines) {
+  const text = caption(line.text);
+  const file = voiced ? await voice(line.text, narration) : null;
+  const length = file ? probe(file, "format=duration")[0] : Math.max(1.8, text.split(/\s+/).length / READING_WPS + 0.6);
+  lines.push({ ...line, caption: text, file, length });
+}
+
+// The sections, each as long as its lines (one after another, with a beat at each end).
+const sections = (look.sections ?? []).map((s, i) => {
+  let t = 1.0;
+  for (const l of lines.filter((x) => x.section === i)) {
+    l.local = t;
+    t += l.length + GAP_SEC;
+  }
+  return { ...s, duration: Math.max(8, t + 1.0) };
+});
+
+// The showcase scenarios.
 const scenes = (look.showcase ?? composed.map((s) => s.name)).map((name) => {
   const s = composed.find((x) => x.name === name);
   if (!s) throw new Error(`No composed scenario '${name}'; run scripts/demo-compose.mjs ${name}`);
@@ -75,7 +102,38 @@ const scenes = (look.showcase ?? composed.map((s) => s.name)).map((name) => {
   return { ...s, chapter, video: join(outDir, `${name}-side-by-side.mp4`) };
 });
 
-// Each side-by-side video is the iPhone take, a 40 px gap and the Android take, 1920 px tall.
+// The final timeline: intro, sections, scenes, end card, each crossfading into the next.
+const parts = [INTRO, ...sections.map((s) => s.duration), ...scenes.map((s) => s.duration)];
+const startOfPart = (k) => parts.slice(0, k).reduce((t, d) => t + d - FADE, 0);
+const sectionAt = (i) => startOfPart(1 + i);
+const sceneAt = (j) => startOfPart(1 + sections.length + j);
+const outroAt = startOfPart(parts.length);
+
+// Place every line: sections on their own schedule, the rest at their cue unless the
+// line before is still up.
+let free = 0;
+const placed = [];
+for (const l of lines) {
+  let cue;
+  if (l.section !== undefined) cue = sectionAt(l.section) + l.local;
+  else if (l.at === "intro") cue = 0.6;
+  else if (l.at === "outro") cue = outroAt + 0.5;
+  else {
+    const j = scenes.findIndex((x) => x.name === l.scenario);
+    if (j < 0) continue; // a scenario left out of the showcase
+    if (scenes[j].marks[l.at] === undefined) throw new Error(`No mark '${l.at}' in ${l.scenario}`);
+    cue = sceneAt(j) + scenes[j].marks[l.at];
+  }
+  cue += l.delay ?? 0;
+  const start = Math.max(cue, free);
+  free = start + l.length + GAP_SEC;
+  placed.push({ ...l, start, onStage: l.scenario !== undefined });
+  const late = start - cue > 0.05 ? `  (${(start - cue).toFixed(1)} s late)` : "";
+  console.log(`${start.toFixed(1).padStart(6)} s  ${l.length.toFixed(1)} s  ${l.caption.slice(0, 60)}${late}`);
+}
+const length = Math.max(outroAt + OUTRO, free - GAP_SEC + 1.5);
+
+// Stills: cards, the stage furniture, chapter titles and the captions.
 const [srcW, srcH] = probe(scenes[0].video, "stream=width,height");
 const [iw, ih] = probe(join(outDir, `${scenes[0].name}-ios.mp4`), "stream=width,height");
 const iosSrcW = 2 * Math.round((iw * srcH) / ih / 2);
@@ -86,23 +144,6 @@ const iosW = even((iosSrcW * PHONE_H) / srcH);
 const andW = even((andSrcW * PHONE_H) / srcH);
 const andX = 1920 - 120 - andW;
 const iosX = andX - 64 - iosW;
-
-// The final timeline: intro, capabilities, the scenes, the end card, each crossfading
-// into the next (so each part starts one fade before the previous one ends).
-const caps = look.capabilities ?? null;
-const capsLen = caps ? caps.duration : 0;
-const parts = [INTRO, ...(caps ? [capsLen] : []), ...scenes.map((s) => s.duration)];
-const startOfPart = (k) => parts.slice(0, k).reduce((t, d) => t + d - FADE, 0);
-const capsAt = startOfPart(1);
-const sceneAt = (j) => startOfPart((caps ? 2 : 1) + j);
-const outroAt = startOfPart(parts.length);
-
-// The stills: cards, the stage furniture, chapter titles, the section and its tiles.
-const tilePos = (i) => {
-  const cols = 4;
-  const left = (1920 - (cols * TILE.width + (cols - 1) * TILE.gap)) / 2;
-  return { x: left + (i % cols) * (TILE.width + TILE.gap), y: TILE.top + Math.floor(i / cols) * (TILE.height + TILE.gap) };
-};
 const jobs = [
   { kind: "background", out: join(assets, "background.png") },
   { kind: "card", out: join(assets, "intro.png"), ...look.intro },
@@ -118,56 +159,21 @@ const jobs = [
     { text: look.labels[1], x: andX, y: PHONE_Y + PHONE_H + 26, width: andW },
   ] },
   ...scenes.map((s, j) => ({ kind: "chapter", out: join(assets, `chapter-${j}.png`), step: s.chapter.step, title: s.chapter.title, subtitle: s.chapter.subtitle, width: CAPTION.width, height: CAPTION.height })),
-  ...(caps ? [
-    { kind: "section", out: join(assets, "section.png"), title: caps.title, subtitle: caps.subtitle },
-    ...caps.tiles.map((t, i) => ({ kind: "tile", out: join(assets, `tile-${i}.png`), icon: t.icon, title: t.title, text: t.text, width: TILE.width, height: TILE.height })),
-  ] : []),
+  ...placed.map((p, i) => ({ kind: "subtitle", out: join(assets, `sub-${i}.png`), text: p.caption, ...(p.onStage ? SUB_STAGE : SUB_CENTER) })),
 ];
 writeFileSync(join(assets, "jobs.json"), JSON.stringify(jobs));
 run("swift", [join(root, "scripts/demo-cards.swift"), join(assets, "jobs.json")]);
 
-// Narration, placed without overlaps.
-let free = 0;
-const placed = [];
-for (const line of narration.lines) {
-  let cue;
-  if (line.at === "intro") cue = 0.6;
-  else if (line.at === "capabilities") cue = capsAt;
-  else if (line.at === "outro") cue = outroAt + 0.5;
-  else {
-    const j = scenes.findIndex((x) => x.name === line.scenario);
-    if (j < 0) continue; // a scenario left out of the showcase
-    if (scenes[j].marks[line.at] === undefined) throw new Error(`No mark '${line.at}' in ${line.scenario}`);
-    cue = sceneAt(j) + scenes[j].marks[line.at];
-  }
-  cue += line.delay ?? 0;
-  const file = await voice(line.text, narration, key);
-  const [length] = probe(file, "format=duration");
-  const start = Math.max(cue, free);
-  free = start + length + GAP_SEC;
-  placed.push({ file, start, length });
-  const late = start - cue > 0.05 ? `  (${(start - cue).toFixed(1)} s late)` : "";
-  console.log(`${start.toFixed(1).padStart(6)} s  ${length.toFixed(1)} s  ${line.scenario ?? ""}/${line.at}${late}`);
-}
-const length = Math.max(outroAt + OUTRO, free - GAP_SEC + 1.5);
-
 const still = (path, seconds) => ["-loop", "1", "-framerate", "30", "-t", seconds.toFixed(3), "-i", path];
 const encode = ["-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p", "-r", "30"];
 
-// The capability section: tiles rise and fade in on the section backdrop at their times.
-const capsClip = join(assets, "capabilities.mp4");
-if (caps) {
-  const inputs = [...still(join(assets, "section.png"), capsLen)];
-  caps.tiles.forEach((t, i) => inputs.push(...still(join(assets, `tile-${i}.png`), capsLen - t.at)));
-  const f = [`[0:v]format=rgba[t0]`];
-  caps.tiles.forEach((t, i) => {
-    const { x, y } = tilePos(i);
-    f.push(`[${i + 1}:v]format=rgba,fade=t=in:st=0:d=0.5:alpha=1,setpts=PTS-STARTPTS+${t.at}/TB[tile${i}]`);
-    f.push(`[t${i}][tile${i}]overlay=x=${x}:y='${y}+24*max(0,1-(t-${t.at})/0.5)':eof_action=pass[t${i + 1}]`);
-  });
-  f.push(`[t${caps.tiles.length}]format=yuv420p,setsar=1[vout]`);
-  console.log("Rendering the capabilities…");
-  run("ffmpeg", ["-v", "error", "-y", ...inputs, "-filter_complex", f.join(";"), "-map", "[vout]", ...encode, "-crf", "16", "-t", String(capsLen), capsClip]);
+// The sections, animated. Long sections play their animation a little slower.
+const sectionClips = [];
+for (const [i, s] of sections.entries()) {
+  const clip = join(assets, `section-${i}.mp4`);
+  console.log(`Animating ${s.scene}…`);
+  await animate(s.scene, s.duration, clip, { icon: s.icon, kicker: s.kicker, title: s.title, points: s.points }, Math.min(1, Math.max(0.65, 11 / s.duration)));
+  sectionClips.push(clip);
 }
 
 // Each scene on the stage: phones with rounded corners and their frame on the
@@ -204,41 +210,67 @@ const sceneClips = scenes.map((s, j) => {
   return clip;
 });
 
-// The video: every part crossfaded into the next; the voice lines, and the music
-// ducked under them.
+// Closed captions as SubRip, for the subtitle track and alongside the video.
+const stamp = (s) => {
+  const ms = Math.round(s * 1000);
+  const p = (n, w = 2) => String(n).padStart(w, "0");
+  return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
+};
+const srt = join(outDir, "jig-demo.srt");
+writeFileSync(srt, placed.map((p, i) => `${i + 1}\n${stamp(p.start)} --> ${stamp(p.start + p.length)}\n${p.caption}\n`).join("\n"));
+
+// The video: every part crossfaded into the next, captions on top; the voice (if any)
+// and the music under it.
 const music = join(outDir, "music.mp3");
 const inputs = [...still(join(assets, "intro.png"), INTRO)];
-if (caps) inputs.push("-i", capsClip);
+sectionClips.forEach((c) => inputs.push("-i", c));
 sceneClips.forEach((c) => inputs.push("-i", c));
 inputs.push(...still(join(assets, "outro.png"), length - outroAt));
 const videoInputs = parts.length + 1;
-const voiceBase = videoInputs;
-placed.forEach((p) => inputs.push("-i", p.file));
-const musicIn = existsSync(music) ? voiceBase + placed.length : -1;
+const subBase = videoInputs;
+placed.forEach((p, i) => inputs.push(...still(join(assets, `sub-${i}.png`), p.length)));
+const voiceBase = subBase + placed.length;
+const voices = placed.filter((p) => p.file);
+voices.forEach((p) => inputs.push("-i", p.file));
+const musicIn = existsSync(music) ? voiceBase + voices.length : -1;
 if (musicIn >= 0) inputs.push("-stream_loop", "-1", "-i", music);
+const srtIn = inputs.filter((x) => x === "-i").length;
+inputs.push("-i", srt);
 
 const f = [];
 for (let k = 0; k < videoInputs; k++) f.push(`[${k}:v]setpts=PTS-STARTPTS,fps=30,format=yuv420p,setsar=1,settb=AVTB[p${k}]`);
 let acc = "p0";
 for (let k = 1; k < videoInputs; k++) {
-  const label = k === videoInputs - 1 ? "vx" : `x${k}`;
-  f.push(`[${acc}][p${k}]xfade=transition=fade:duration=${FADE}:offset=${startOfPart(k).toFixed(3)}[${label}]`);
-  acc = label;
+  f.push(`[${acc}][p${k}]xfade=transition=fade:duration=${FADE}:offset=${startOfPart(k).toFixed(3)}[x${k}]`);
+  acc = `x${k}`;
 }
-f.push(`[vx]fade=t=in:st=0:d=0.6,fade=t=out:st=${(length - 0.8).toFixed(3)}:d=0.8[vout]`);
-placed.forEach((p, i) => f.push(`[${voiceBase + i}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(p.start * 1000)}:all=1[n${i}]`));
-f.push(`${placed.map((_, i) => `[n${i}]`).join("")}amix=inputs=${placed.length}:normalize=0,apad=whole_dur=${length.toFixed(3)},volume=1.6[voice]`);
+placed.forEach((p, i) => {
+  f.push(`[${subBase + i}:v]format=rgba,fade=t=in:st=0:d=0.2:alpha=1,fade=t=out:st=${Math.max(0, p.length - 0.2).toFixed(3)}:d=0.2:alpha=1,setpts=PTS-STARTPTS+${p.start.toFixed(3)}/TB[sub${i}]`);
+  f.push(`[${acc}][sub${i}]overlay=0:0:eof_action=pass[c${i}]`);
+  acc = `c${i}`;
+});
+f.push(`[${acc}]fade=t=in:st=0:d=0.6,fade=t=out:st=${(length - 0.8).toFixed(3)}:d=0.8,format=yuv420p[vout]`);
+const audio = [];
+if (voices.length) {
+  voices.forEach((p, i) => f.push(`[${voiceBase + i}:a]aresample=48000,aformat=channel_layouts=stereo,adelay=${Math.round(p.start * 1000)}:all=1[n${i}]`));
+  f.push(`${voices.map((_, i) => `[n${i}]`).join("")}amix=inputs=${voices.length}:normalize=0,apad=whole_dur=${length.toFixed(3)},volume=1.6[voice]`);
+}
 if (musicIn >= 0) {
-  f.push(`[voice]asplit=2[voice1][key]`);
-  f.push(`[${musicIn}:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${length.toFixed(3)},volume=0.12,afade=t=in:st=0:d=1.5,afade=t=out:st=${(length - 3).toFixed(3)}:d=3[bed]`);
-  f.push(`[bed][key]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=500[ducked]`);
-  f.push(`[voice1][ducked]amix=inputs=2:normalize=0,alimiter=limit=0.95[aout]`);
-} else {
+  f.push(`[${musicIn}:a]aresample=48000,aformat=channel_layouts=stereo,atrim=0:${length.toFixed(3)},volume=${voices.length ? 0.12 : 0.2},afade=t=in:st=0:d=1.5,afade=t=out:st=${(length - 3).toFixed(3)}:d=3[bed]`);
+  if (voices.length) {
+    f.push(`[voice]asplit=2[voice1][key]`);
+    f.push(`[bed][key]sidechaincompress=threshold=0.03:ratio=6:attack=30:release=500[ducked]`);
+    f.push(`[voice1][ducked]amix=inputs=2:normalize=0,alimiter=limit=0.95[aout]`);
+  } else f.push(`[bed]alimiter=limit=0.95[aout]`);
+  audio.push("-map", "[aout]", "-c:a", "aac", "-b:a", "192k");
+} else if (voices.length) {
   f.push(`[voice]alimiter=limit=0.95[aout]`);
+  audio.push("-map", "[aout]", "-c:a", "aac", "-b:a", "192k");
 }
 
 const out = join(outDir, "jig-demo.mp4");
 console.log("Rendering the video…");
-run("ffmpeg", ["-v", "error", "-y", ...inputs, "-filter_complex", f.join(";"), "-map", "[vout]", "-map", "[aout]",
-  ...encode, "-crf", "19", "-c:a", "aac", "-b:a", "192k", "-t", length.toFixed(3), "-movflags", "+faststart", out]);
-console.log(`${out} (${length.toFixed(1)} s, ${caps ? `${caps.tiles.length} tiles, ` : ""}${scenes.length} scene${scenes.length === 1 ? "" : "s"}, ${placed.length} lines${musicIn >= 0 ? ", music" : ""})`);
+run("ffmpeg", ["-v", "error", "-y", ...inputs, "-filter_complex", f.join(";"), "-map", "[vout]", ...audio,
+  "-map", `${srtIn}:s`, "-c:s", "mov_text", "-metadata:s:s:0", "language=eng",
+  ...encode, "-crf", "19", "-t", length.toFixed(3), "-movflags", "+faststart", out]);
+console.log(`${out} (${length.toFixed(1)} s, ${sections.length} sections, ${scenes.length} scene${scenes.length === 1 ? "" : "s"}, ${placed.length} captions${voices.length ? ", voiced" : ""}${musicIn >= 0 ? ", music" : ""})\n${srt}`);

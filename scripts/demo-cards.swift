@@ -1,5 +1,6 @@
-// Renders the demo video's stills (background, title cards, captions, phone masks and
-// shadows) to PNGs with the system font, since the installed ffmpeg can't draw text.
+// Renders the demo video's stills (background, title cards, chapter titles, closed
+// captions, phone masks and frames) to PNGs with the system font, since the installed
+// ffmpeg can't draw text. The how-it-works animations are canvas (demo/animations).
 //
 // Usage: swift scripts/demo-cards.swift <jobs.json>
 // jobs.json: [{"kind": ..., "out": "path.png", ...}], see the cases below.
@@ -100,19 +101,6 @@ for job in jobs {
                 text(foot, font(28, .regular), soft.withAlphaComponent(0.8), at: CGPoint(x: 160, y: 930), width: W - 320, align: .center, kern: 0.5)
             }
         }, out)
-    case "caption":
-        // The left column: a small step label, a big headline and a softer line.
-        let w = CGFloat(job["width"] as? Double ?? 700), h = CGFloat(job["height"] as? Double ?? 520)
-        save(image(w, h) { _ in
-            var y: CGFloat = 0
-            if let step = job["step"] as? String, !step.isEmpty {
-                y += text(step.uppercased(), font(26, .bold), accent, at: CGPoint(x: 0, y: y), width: w, kern: 3) + 18
-            }
-            y += text(job["title"] as! String, font(76, .bold), ink, at: CGPoint(x: 0, y: y), width: w, kern: -0.5, lineHeight: 84) + 20
-            if let sub = job["subtitle"] as? String, !sub.isEmpty {
-                text(sub, font(36, .regular), soft, at: CGPoint(x: 0, y: y), width: w, lineHeight: 46)
-            }
-        }, out)
     case "chapter":
         // A chapter title for the left column: a large accent number, a headline, one line.
         let w = CGFloat(job["width"] as? Double ?? 700), h = CGFloat(job["height"] as? Double ?? 640)
@@ -125,47 +113,21 @@ for job in jobs {
             y += text(job["title"] as! String, font(88, .bold), ink, at: CGPoint(x: 0, y: y), width: w, kern: -1, lineHeight: 96) + 28
             text(job["subtitle"] as! String, font(34, .regular), soft, at: CGPoint(x: 0, y: y), width: w * 0.92, lineHeight: 46)
         }, out)
-    case "section":
-        // A section's backdrop: the stage background with a headline and a line under it.
+    case "subtitle":
+        // A caption on a dark pill, centered in a box at (x, y, width): the burned-in closed captions.
+        let x = CGFloat(job["x"] as! Double), y = CGFloat(job["y"] as! Double), width = CGFloat(job["width"] as! Double)
+        let align: NSTextAlignment = (job["align"] as? String) == "left" ? .left : .center
         save(image(W, H) { cg in
-            background(cg)
-            text(job["title"] as! String, font(64, .bold), ink, at: CGPoint(x: 155, y: 110), width: W - 310, kern: -0.5)
-            text(job["subtitle"] as! String, font(32, .regular), soft, at: CGPoint(x: 155, y: 196), width: W - 310)
-        }, out)
-    case "tile":
-        // One capability: an SF Symbol in an accent badge, a title and a line, on a glassy card.
-        let w = CGFloat(job["width"] as! Double), h = CGFloat(job["height"] as! Double)
-        save(image(w, h) { cg in
-            let card = CGRect(x: 0, y: 0, width: w, height: h)
-            cg.setFillColor(NSColor.white.withAlphaComponent(0.07).cgColor)
-            cg.addPath(CGPath(roundedRect: card, cornerWidth: 28, cornerHeight: 28, transform: nil))
+            let f = font(job["size"] as? Double ?? 36, .medium)
+            let para = NSMutableParagraphStyle(); para.alignment = align; para.minimumLineHeight = f.pointSize * 1.3; para.maximumLineHeight = f.pointSize * 1.3
+            let str = NSAttributedString(string: job["text"] as! String, attributes: [.font: f, .paragraphStyle: para])
+            let measured = str.boundingRect(with: CGSize(width: width - 56, height: 600), options: [.usesLineFragmentOrigin, .usesFontLeading])
+            let w = min(width, ceil(measured.width) + 56), h = ceil(measured.height) + 32
+            let left = align == .center ? x + (width - w) / 2 : x
+            cg.setFillColor(NSColor.black.withAlphaComponent(0.62).cgColor)
+            cg.addPath(CGPath(roundedRect: CGRect(x: left, y: y - h, width: w, height: h), cornerWidth: 18, cornerHeight: 18, transform: nil))
             cg.fillPath()
-            cg.setStrokeColor(NSColor.white.withAlphaComponent(0.12).cgColor)
-            cg.setLineWidth(2)
-            cg.addPath(CGPath(roundedRect: card.insetBy(dx: 1, dy: 1), cornerWidth: 27, cornerHeight: 27, transform: nil))
-            cg.strokePath()
-            let badge = CGRect(x: 32, y: 32, width: 72, height: 72)
-            let space = CGColorSpaceCreateDeviceRGB()
-            let g = CGGradient(colorsSpace: space, colors: [accent.cgColor, NSColor(red: 0.72, green: 0.38, blue: 1, alpha: 1).cgColor] as CFArray, locations: [0, 1])!
-            cg.saveGState()
-            cg.addPath(CGPath(roundedRect: badge, cornerWidth: 20, cornerHeight: 20, transform: nil))
-            cg.clip()
-            cg.drawLinearGradient(g, start: badge.origin, end: CGPoint(x: badge.maxX, y: badge.maxY), options: [])
-            cg.restoreGState()
-            if let name = job["icon"] as? String,
-               let symbol = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 34, weight: .semibold).applying(.init(paletteColors: [.white]))) {
-                let s = symbol.size
-                let r = CGRect(x: badge.midX - s.width / 2, y: badge.midY - s.height / 2, width: s.width, height: s.height)
-                // Images draw upright in the flipped context only when flipped back locally.
-                cg.saveGState()
-                cg.translateBy(x: 0, y: r.minY * 2 + r.height)
-                cg.scaleBy(x: 1, y: -1)
-                symbol.draw(in: r)
-                cg.restoreGState()
-            }
-            let y = 128 + text(job["title"] as! String, font(34, .bold), ink, at: CGPoint(x: 32, y: 128), width: w - 64, kern: -0.3) + 8
-            text(job["text"] as! String, font(23, .regular), soft, at: CGPoint(x: 32, y: y), width: w - 64, lineHeight: 30)
+            text(job["text"] as! String, f, ink, at: CGPoint(x: left + 28, y: y - h + 16), width: w - 56, align: align, lineHeight: f.pointSize * 1.3)
         }, out)
     case "label":
         // Platform labels under the phones, on a transparent full frame.

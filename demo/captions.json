@@ -13,61 +13,96 @@
     "iPhone · UIKit",
     "Android · Views"
   ],
-  "capabilities": {
-    "title": "Everything an app needs, built in",
-    "subtitle": "Every app Jig makes is a spec the container runs natively, with these for free.",
-    "duration": 20,
-    "tiles": [
-      {
-        "icon": "text.bubble.fill",
-        "title": "Say it, get an app",
-        "text": "Muse Spark writes it. Jig checks it and repairs it.",
-        "at": 1.0
-      },
-      {
-        "icon": "iphone.gen3",
-        "title": "Native everywhere",
-        "text": "UIKit, Android Views and the web, from one spec.",
-        "at": 2.4
-      },
-      {
-        "icon": "hand.point.up.left.fill",
-        "title": "Change by pointing",
-        "text": "Select any part and say what you want.",
-        "at": 3.8
-      },
-      {
-        "icon": "externaldrive.fill",
-        "title": "Storage built in",
-        "text": "On-device SQLite. Secrets in the keychain.",
-        "at": 8.3
-      },
-      {
-        "icon": "bell.badge.fill",
-        "title": "Works while closed",
-        "text": "Reminders and alarms, scheduled by the OS.",
-        "at": 9.6
-      },
-      {
-        "icon": "arrow.triangle.2.circlepath",
-        "title": "Apps that share",
-        "text": "One personal data store, with your permission.",
-        "at": 10.9
-      },
-      {
-        "icon": "sparkles",
-        "title": "AI inside apps",
-        "text": "Meta's model, one action away. Your key stays put.",
-        "at": 14.8
-      },
-      {
-        "icon": "camera.viewfinder",
-        "title": "Sees with SAM 3.1",
-        "text": "Count what's on a shelf from one photo.",
-        "at": 16.4
-      }
-    ]
-  },
+  "sections": [
+    {
+      "scene": "spec",
+      "icon": "doc",
+      "kicker": "How it works",
+      "title": "Apps are data, not code",
+      "points": [
+        "Muse Spark writes a JSON spec",
+        "Screens, typed data, actions, schedules",
+        "Nothing to compile, nothing to deploy"
+      ]
+    },
+    {
+      "scene": "validate",
+      "icon": "seal",
+      "kicker": "Safety net",
+      "title": "Checked before you see it",
+      "points": [
+        "JSON Schema built from the runtime",
+        "Every screen rendered off-screen",
+        "Errors go back to the model"
+      ]
+    },
+    {
+      "scene": "runtime",
+      "icon": "cpu",
+      "kicker": "Architecture",
+      "title": "One runtime, thin native hosts",
+      "points": [
+        "Shared TypeScript runtime",
+        "Signals and flexbox layout in JS",
+        "Hosts only measure text and draw"
+      ]
+    },
+    {
+      "scene": "point",
+      "icon": "hand",
+      "kicker": "Editing",
+      "title": "Change it by pointing",
+      "points": [
+        "Select any element",
+        "Type or speak the change",
+        "It checks a screenshot of its work"
+      ]
+    },
+    {
+      "scene": "services",
+      "icon": "bell",
+      "kicker": "Container services",
+      "title": "Every app gets the basics",
+      "points": [
+        "Storage in SQLite, secrets in the keychain",
+        "Reminders that fire while it's closed",
+        "Widgets, media, files and camera"
+      ]
+    },
+    {
+      "scene": "share",
+      "icon": "share",
+      "kicker": "Shared data",
+      "title": "Apps that share",
+      "points": [
+        "Apps publish lists",
+        "Others read them, with permission",
+        "Updates flow live between apps"
+      ]
+    },
+    {
+      "scene": "ai",
+      "icon": "spark",
+      "kicker": "Meta models",
+      "title": "AI inside your apps",
+      "points": [
+        "Ask Muse Spark from any app",
+        "Count objects in photos with SAM 3.1",
+        "Icons drawn by Muse Image"
+      ]
+    },
+    {
+      "scene": "code",
+      "icon": "code",
+      "kicker": "Escape hatch",
+      "title": "Code, when a spec isn't enough",
+      "points": [
+        "Sandboxed scripts, 5 s per call",
+        "Libraries pinned by SHA-256",
+        "UI still drawn natively"
+      ]
+    }
+  ],
   "showcase": [
     "1-plants"
   ],
