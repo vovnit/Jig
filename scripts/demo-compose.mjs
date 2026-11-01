@@ -85,6 +85,7 @@ export function filterComplex(segments, durations = {}) {
   const iosDur = Number.isFinite(durations?.ios) ? durations.ios : Infinity;
   const andDur = Number.isFinite(durations?.android) ? durations.android : Infinity;
   const parts = [];
+  const inputs = [];
   const ios = [];
   const and = [];
   segments.forEach((s, i) => {
@@ -92,33 +93,23 @@ export function filterComplex(segments, durations = {}) {
     const dIos = s.ios[1] - s.ios[0];
     const dAnd = s.and[1] - s.and[0];
     const longest = Math.max(dIos, dAnd) / speed;
-    for (const [labels, input, span] of [
-      [ios, 0, s.ios],
-      [and, 1, s.and],
+    for (const [labels, side, span] of [
+      [ios, "ios", s.ios],
+      [and, "android", s.and],
     ]) {
-      const label = `s${i}${input === 0 ? "ios" : "and"}`;
-      const end = input === 0 ? iosDur : andDur;
-      // Clamp the trim to what the recording holds; the rest is a held last frame.
-      const trimStart = Math.min(span[0], end);
-      const trimEnd = Math.min(span[1], end);
-      let trim;
-      let shown;
-      if (!Number.isFinite(end) || trimEnd - trimStart > 0.0005) {
-        trim = `trim=start=${sec(trimStart)}:end=${sec(trimEnd)}`;
-        shown = trimEnd - trimStart;
-      } else {
-        // The segment starts past the recording's end: hold its last frame throughout.
-        const from = Math.max(0, end - 0.1);
-        trim = `trim=start=${sec(from)}:end=${sec(end)}`;
-        shown = end - from;
-      }
-      shown /= speed;
+      const end = side === "ios" ? iosDur : andDur;
+      // Clamp to what the recording holds; the rest is a held last frame.
+      let start = Math.min(span[0], end);
+      let stop = Math.min(span[1], end);
+      // A segment starting past the recording's end holds its last frame throughout.
+      if (Number.isFinite(end) && stop - start <= 0.0005) start = Math.max(0, end - 0.1), stop = end;
+      const shown = (stop - start) / speed;
+      const index = inputs.length;
+      inputs.push({ side, start, duration: stop - start });
+      const label = `s${i}${side === "ios" ? "ios" : "and"}`;
       const fast = speed !== 1 ? `,setpts=PTS/${speed}` : "";
       const hold = longest - shown > 0.0005 ? `,tpad=stop_mode=clone:stop_duration=${sec(longest - shown)}` : "";
-      // Constant frame rate before trimming: the recorders write frames only when the screen
-      // changes, so a segment starting on a still screen would otherwise begin at its next
-      // change and pull that side ahead.
-      parts.push(`[${input}:v]fps=30,${trim},setpts=PTS-STARTPTS${fast}${hold},fps=30,scale=-2:${HEIGHT}[${label}]`);
+      parts.push(`[${index}:v]setpts=PTS-STARTPTS${fast}${hold},fps=30[${label}]`);
       labels.push(`[${label}]`);
     }
   });
@@ -126,7 +117,18 @@ export function filterComplex(segments, durations = {}) {
   parts.push(`${and.join("")}concat=n=${and.length}:v=1:a=0[vand]`);
   parts.push(`[vios]pad=iw+${GAP}:ih:0:0:color=#111111[padded]`);
   parts.push(`[padded][vand]hstack=inputs=2[vout]`);
-  return parts.join(";");
+  return { filter: parts.join(";"), inputs };
+}
+
+/**
+ * A take at a constant 30 fps and [HEIGHT] px tall, with a keyframe every second, so
+ * every segment can seek straight to its start. (The recorders write frames only when
+ * the screen changes; a segment starting on a still screen must still start there.)
+ */
+function constantRate(path) {
+  const out = path.replace(/\.mp4$/, ".cfr.mp4");
+  ffmpeg(["-v", "error", "-y", "-i", path, "-vf", `fps=30,scale=-2:${HEIGHT}`, "-c:v", "libx264", "-preset", "veryfast", "-crf", "14", "-g", "30", "-pix_fmt", "yuv420p", "-an", out]);
+  return out;
 }
 
 /** When each mark plays in the composed video, and its length, in seconds. */
@@ -185,7 +187,10 @@ if (isMain) {
     if (iosDur != null) durations.ios = iosDur;
     if (andDur != null) durations.android = andDur;
     const out = join(outDir, `${name}-side-by-side.mp4`);
-    ffmpeg(["-y", "-i", iosMp4, "-i", andMp4, "-filter_complex", filterComplex(segments, durations), "-map", "[vout]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an", out]);
+    const cfr = { ios: constantRate(iosMp4), android: constantRate(andMp4) };
+    const { filter, inputs } = filterComplex(segments, durations);
+    const args = inputs.flatMap((x) => ["-ss", sec(x.start), "-t", sec(Math.max(x.duration, 0.034)), "-i", cfr[x.side]]);
+    ffmpeg(["-v", "error", "-y", ...args, "-filter_complex", filter, "-map", "[vout]", "-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an", out]);
     console.log(`${out}`);
     segments.forEach((s, i) => {
       const dIos = s.ios[1] - s.ios[0];

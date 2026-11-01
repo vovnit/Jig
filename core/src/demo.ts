@@ -338,6 +338,8 @@ export function runDemo(shell: Runtime, script: DemoScript, opts?: RunDemoOption
 
     for (let i = 0; i < script.steps.length; i++) {
       const step = script.steps[i] as DemoStep;
+      // Every action is a sync point too: the composer lines two takes up at each one.
+      if (["tap", "select", "type", "submit", "scrollTo", "back", "setItem"].some((k) => k in step)) marks.push({ name: `@${i}`, t: now() });
       try {
         if ("record" in step) {
           try {

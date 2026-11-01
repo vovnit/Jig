@@ -113,6 +113,18 @@ for job in jobs {
                 text(sub, font(36, .regular), soft, at: CGPoint(x: 0, y: y), width: w, lineHeight: 46)
             }
         }, out)
+    case "chapter":
+        // A chapter title for the left column: a large accent number, a headline, one line.
+        let w = CGFloat(job["width"] as? Double ?? 700), h = CGFloat(job["height"] as? Double ?? 640)
+        save(image(w, h) { cg in
+            var y: CGFloat = 0
+            y += text(job["step"] as! String, font(120, .heavy), accent, at: CGPoint(x: -6, y: y), width: w, kern: -2, lineHeight: 120) + 6
+            cg.setFillColor(accent.withAlphaComponent(0.8).cgColor)
+            cg.fill(CGRect(x: 0, y: y, width: 72, height: 6))
+            y += 36
+            y += text(job["title"] as! String, font(88, .bold), ink, at: CGPoint(x: 0, y: y), width: w, kern: -1, lineHeight: 96) + 28
+            text(job["subtitle"] as! String, font(34, .regular), soft, at: CGPoint(x: 0, y: y), width: w * 0.92, lineHeight: 46)
+        }, out)
     case "label":
         // Platform labels under the phones, on a transparent full frame.
         save(image(W, H) { _ in

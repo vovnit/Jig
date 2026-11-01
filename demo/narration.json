@@ -1,23 +1,17 @@
 {
   "voice": "cgSgspJ2msm6clMCkdW9",
   "model": "eleven_v4",
-  "settings": { "stability": 0.35, "similarity_boost": 0.8, "style": 0.45, "use_speaker_boost": true },
+  "settings": { "stability": 0.4, "similarity_boost": 0.8, "style": 0.35, "use_speaker_boost": true },
   "lines": [
-    { "at": "intro", "text": "[excited] You know that one little app you wish existed? Jig makes it. From one sentence." },
-    { "scenario": "1-plants", "at": "describe", "text": "Like... my houseplants. Each one on its own watering schedule." },
-    { "scenario": "1-plants", "at": "generating", "text": "[curious] Muse Spark is designing it right now. Screens, data, a nine a.m. reminder. And when something doesn't check out? [impressed] It fixes itself." },
-    { "scenario": "1-plants", "at": "open", "text": "[delighted] And there it is. A real native app, on iPhone and Android. Same app, both phones." },
-    { "scenario": "1-plants", "at": "due", "text": "The fern's thirsty! Jig will nudge me at nine, even with the app closed." },
-    { "scenario": "1-plants", "at": "select", "text": "Want something changed? Tap it, and just say it." },
-    { "scenario": "1-plants", "at": "editing", "text": "[impressed] It edits just that part, then checks its own work." },
-    { "scenario": "2-shopping", "at": "home", "text": "[playful] Now, apps that talk to each other." },
-    { "scenario": "2-shopping", "at": "generating", "text": "A shopping list that reads my pantry. For the tricky part, it even writes a little script, and Jig runs it safely in a sandbox." },
-    { "scenario": "2-shopping", "at": "open", "text": "It asks before peeking at another app's data. Then whatever's running low just shows up." },
-    { "scenario": "2-shopping", "at": "pantry", "text": "Down to one jar?" },
-    { "scenario": "2-shopping", "at": "shared", "text": "[delighted] Already on the list." },
-    { "scenario": "3-dinner", "at": "home", "text": "And yes, your apps can use Meta's AI too." },
-    { "scenario": "3-dinner", "at": "built", "text": "[laughs] That was quick." },
-    { "scenario": "3-dinner", "at": "use", "text": "What's in my fridge? Three dinners, thirty minutes. And my API key never even touches the app." },
+    { "at": "intro", "text": "[excited] What if you could just... describe the app you need?" },
+    { "scenario": "1-plants", "at": "generating", "text": "Muse Spark builds it, and checks its own work." },
+    { "scenario": "1-plants", "at": "open", "text": "[delighted] A real native app. On iPhone, and Android." },
+    { "scenario": "1-plants", "at": "due", "text": "It'll even remind me while it's closed." },
+    { "scenario": "1-plants", "at": "select", "text": "Want a change? Point at it, and say it." },
+    { "scenario": "2-shopping", "at": "home", "text": "[playful] Apps can share, too." },
+    { "scenario": "2-shopping", "at": "pantry", "text": "My pantry runs low... and the list already knows." },
+    { "scenario": "3-dinner", "at": "home", "text": "And they can use Meta's AI." },
+    { "scenario": "3-dinner", "at": "ideas", "text": "[laughs] Dinner, sorted." },
     { "at": "outro", "text": "[warmly] Describe it. Use it. Change it. That's Jig." }
   ]
 }

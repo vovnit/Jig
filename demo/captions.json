@@ -2,20 +2,9 @@
   "intro": { "title": "Jig", "subtitle": "Describe an app. Get a native one.", "footer": "Built with Muse Spark · Muse Image · SAM 3.1 on the Meta Model API" },
   "outro": { "title": "Describe it. Use it. Change it.", "subtitle": "Native apps from a sentence, on iPhone and Android", "footer": "Jig · Meta Global AI Developer Hackathon" },
   "labels": ["iPhone · UIKit", "Android · Views"],
-  "captions": [
-    { "scenario": "1-plants", "at": "home", "step": "1 · Describe", "title": "One sentence", "subtitle": "No code, no templates" },
-    { "scenario": "1-plants", "at": "generating", "step": "1 · Build", "title": "Muse Spark builds it", "subtitle": "A spec, validated and repaired on its own" },
-    { "scenario": "1-plants", "at": "open", "step": "1 · Run", "title": "Native on both", "subtitle": "UIKit and Android Views, from one spec" },
-    { "scenario": "1-plants", "at": "due", "step": "1 · Remind", "title": "Works while closed", "subtitle": "Reminders scheduled by the container" },
-    { "scenario": "1-plants", "at": "select", "step": "1 · Change", "title": "Point and say", "subtitle": "Select any part, describe the change" },
-    { "scenario": "1-plants", "at": "editing", "step": "1 · Change", "title": "It checks its work", "subtitle": "Edits, takes a screenshot, fixes" },
-    { "scenario": "2-shopping", "at": "home", "step": "2 · Share", "title": "Apps that talk", "subtitle": "A personal data store across apps" },
-    { "scenario": "2-shopping", "at": "generating", "step": "2 · Build", "title": "Code when needed", "subtitle": "Sandboxed scripts, pinned libraries" },
-    { "scenario": "2-shopping", "at": "open", "step": "2 · Share", "title": "Asks first", "subtitle": "Permission per app, per collection" },
-    { "scenario": "2-shopping", "at": "pantry", "step": "2 · Share", "title": "Pantry runs low…", "subtitle": "" },
-    { "scenario": "2-shopping", "at": "shared", "step": "2 · Share", "title": "…the list knows", "subtitle": "Live across apps" },
-    { "scenario": "3-dinner", "at": "home", "step": "3 · AI", "title": "AI inside apps", "subtitle": "Meta's model, one action away" },
-    { "scenario": "3-dinner", "at": "use", "step": "3 · AI", "title": "Your key stays put", "subtitle": "The shell asks the model; apps never see the key" },
-    { "scenario": "3-dinner", "at": "favorites", "step": "3 · AI", "title": "Dinner, sorted", "subtitle": "Saved to favorites" }
+  "chapters": [
+    { "scenario": "1-plants", "step": "01", "title": "Say it.\nGet an app.", "subtitle": "Muse Spark turns one sentence into a native app, then changes it the same way." },
+    { "scenario": "2-shopping", "step": "02", "title": "Apps that\nshare", "subtitle": "One personal data store across your apps, with your permission." },
+    { "scenario": "3-dinner", "step": "03", "title": "AI inside", "subtitle": "Apps can ask Meta's model. Your key never leaves the shell." }
   ]
 }

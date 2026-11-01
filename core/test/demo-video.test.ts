@@ -30,14 +30,13 @@ test("no shared marks means no segments", () => {
 });
 
 test("the filter holds the shorter side and stacks iPhone left", () => {
-  const filter = filterComplex(planSegments(ios, and));
+  const { filter, inputs } = filterComplex(planSegments(ios, and));
   // Segment 1's iOS side (4 s) is held for the Android side's extra second.
   assert.ok(filter.includes("tpad=stop_mode=clone:stop_duration=1"), filter);
   // The lead-in matches on both sides, so it holds nothing.
   assert.ok(!filter.includes("stop_duration=0"), filter);
-  // Constant frame rate before the trim, so a segment starting on a still screen keeps its start.
-  assert.ok(/\[0:v\]fps=30,trim=/.test(filter) && /\[1:v\]fps=30,trim=/.test(filter), filter);
-  assert.ok(filter.includes("scale=-2:1920["), filter);
+  // Each segment side is its own input, seeking to where the segment starts.
+  assert.deepEqual(inputs.map((x: any) => [x.side, x.start, x.duration]), [["ios", 0, 4], ["android", 0, 4], ["ios", 4, 4], ["android", 4, 5], ["ios", 8, 3], ["android", 9, 3]]);
   assert.ok(filter.includes("concat=n=3:v=1:a=0"), filter);
   assert.ok(filter.includes("pad=iw+40:ih"), filter);
   assert.ok(filter.includes("hstack=inputs=2[vout]"), filter);
@@ -55,15 +54,15 @@ test("each lead-in ends at its own first mark", () => {
 
 test("a short take holds its last frame through the 3 s tail", () => {
   const tail = [{ ios: [10, 13], and: [10, 13] }];
-  const filter = filterComplex(tail, { ios: 11, android: 20 });
-  // The iOS trim ends at the recording's real end; the missing 2 s are held.
-  assert.ok(filter.includes("trim=start=10:end=11"), filter);
+  const { filter, inputs } = filterComplex(tail, { ios: 11, android: 20 });
+  // The iOS input ends at the recording's real end; the missing 2 s are held.
+  assert.deepEqual([inputs[0].start, inputs[0].duration], [10, 1]);
   assert.ok(filter.includes("tpad=stop_mode=clone:stop_duration=2"), filter);
 });
 
 test("both short takes still play the full tail", () => {
   const tail = [{ ios: [10, 13], and: [10, 13] }];
-  const filter = filterComplex(tail, { ios: 11, android: 11 });
+  const { filter } = filterComplex(tail, { ios: 11, android: 11 });
   // Each side shows 1 s and holds 2 s, so both halves stay 3 s long.
   const holds = filter.match(/stop_duration=2/g) ?? [];
   assert.equal(holds.length, 2);
@@ -71,15 +70,15 @@ test("both short takes still play the full tail", () => {
 
 test("a segment ending past the recording is clamped and held", () => {
   const segs = [{ ios: [0, 4], and: [0, 4] }];
-  const filter = filterComplex(segs, { ios: 2, android: 10 });
-  assert.ok(filter.includes("trim=start=0:end=2"), filter);
+  const { filter, inputs } = filterComplex(segs, { ios: 2, android: 10 });
+  assert.deepEqual([inputs[0].start, inputs[0].duration], [0, 2]);
   assert.ok(filter.includes("tpad=stop_mode=clone:stop_duration=2"), filter);
 });
 
 test("a faster segment plays sped up on both sides and shortens the timeline", () => {
   const segs = planSegments(ios, and);
   segs[1].speed = 2;
-  const filter = filterComplex(segs);
+  const { filter } = filterComplex(segs);
   assert.equal(filter.match(/setpts=PTS\/2/g)?.length, 2, filter);
   // Segment "a" (4 s and 5 s) at 2x lasts 2.5 s; the lead-in 4 s, the tail 3 s.
   assert.deepEqual(timeline(segs), { duration: 9.5, marks: { a: 4, b: 6.5 } });

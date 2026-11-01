@@ -186,7 +186,8 @@ test("runDemo taps, types, waits and marks", async () => {
   assert.equal(rt.get("draft"), "hi");
   assert.ok(host.batches.flat().some((o) => o[0] === "update" && ((o[2] as Record<string, unknown>).value === "hi" || (o[2] as Record<string, unknown>).value === "h")), "the host saw typed values");
   assert.ok(logs.some((l) => l.startsWith("JIGDEMO ") && JSON.parse(l.slice(8)).mark === "arrived"), "a mark logs JIGDEMO");
-  assert.deepEqual(marks.map((m) => m.name), ["arrived"]);
+  // Every action is a sync mark of its own, named by its step.
+  assert.deepEqual(marks.map((m) => m.name), ["@0", "@1", "arrived", "@4"]);
   assert.ok(logs.some((l) => JSON.parse(l.slice(8)).done === true));
   assert.equal(rt.nav.peek().length, 1, "back returned home");
 });
@@ -204,7 +205,7 @@ test("runDemo waits for busy and fails a missing node with JIGDEMO", async () =>
   const logs2: string[] = [];
   (host as unknown as { log: Host["log"] }).log = (_level, message) => void logs2.push(message);
   const missed = await drive(host, runDemo(rt, { name: "d", pause: 5, steps: [{ tap: "Nowhere" }] }, { retryMs: 200 }));
-  assert.deepEqual(missed, []);
+  assert.deepEqual(missed.map((m) => m.name), ["@0"], "the tap's sync mark, and nothing after the failure");
   const err = logs2.map((l) => JSON.parse(l.slice(8))).find((o) => o.error);
   assert.ok(err && err.step === 0, "a missing node fails with {error, step}");
 });
@@ -388,10 +389,10 @@ test("a failing step ends with done:true and the record stop carries the error",
     return prev.call(host, service, args, done, progress);
   }) as Host["call"];
   const marks = await drive(host, runDemo(rt, { name: "d", pause: 1, steps: [{ mark: "ok" }, { tap: "Nowhere" }] }, { retryMs: 200 }));
-  assert.deepEqual(marks.map((m) => m.name), ["ok"]);
+  assert.deepEqual(marks.map((m) => m.name), ["ok", "@1"]);
   const last = JSON.parse(logs.at(-1)!.slice(8));
   assert.equal(last.done, true);
-  assert.deepEqual(last.marks.map((m: { name: string }) => m.name), ["ok"]);
+  assert.deepEqual(last.marks.map((m: { name: string }) => m.name), ["ok", "@1"]);
   assert.equal(last.error, "no node 'Nowhere'");
   assert.equal(last.step, 1);
   assert.equal(stops.length, 1);
