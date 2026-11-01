@@ -83,3 +83,15 @@ test("a faster segment plays sped up on both sides and shortens the timeline", (
   // Segment "a" (4 s and 5 s) at 2x lasts 2.5 s; the lead-in 4 s, the tail 3 s.
   assert.deepEqual(timeline(segs), { duration: 9.5, marks: { a: 4, b: 6.5 } });
 });
+
+test("a near-zero segment mid-take plays a frame from where it is, not the take's end", () => {
+  // Two marks 0.2 ms apart at 5 s, in recordings 60 s long.
+  const segs = [{ start: "a", ios: [5, 5.0002], and: [7, 7.0002] }];
+  const { inputs } = filterComplex(segs, { ios: 60, android: 60 });
+  assert.equal(inputs[0].start, 5);
+  assert.equal(inputs[1].start, 7);
+  assert.ok(inputs[0].duration > 0.03 && inputs[0].duration < 0.04);
+  // At the very end, it still holds the last frame.
+  const late = filterComplex([{ start: "z", ios: [60, 63], and: [60, 63] }], { ios: 60, android: 60 }).inputs;
+  assert.ok(late[0].start < 60 && late[0].start >= 59.9);
+});

@@ -18,6 +18,7 @@ const outDir = join(root, "demo/out");
 const HEIGHT = 1920;
 const GAP = 40;
 const TAIL_SEC = 3;
+const FRAME = 1 / 30;
 
 /** Marks both takes have, in the order they appear in the iOS file. */
 export function commonMarks(iosMarks, androidMarks) {
@@ -98,11 +99,14 @@ export function filterComplex(segments, durations = {}) {
       [and, "android", s.and],
     ]) {
       const end = side === "ios" ? iosDur : andDur;
-      // Clamp to what the recording holds; the rest is a held last frame.
+      // Clamp to what the recording holds; the rest is a held last frame. Only a segment
+      // that starts at the recording's end holds that last frame throughout: two marks a
+      // moment apart make a segment of almost nothing, which still plays one frame from
+      // where it is (not the take's final frame, which would flash the end of the flow).
       let start = Math.min(span[0], end);
       let stop = Math.min(span[1], end);
-      // A segment starting past the recording's end holds its last frame throughout.
-      if (Number.isFinite(end) && stop - start <= 0.0005) start = Math.max(0, end - 0.1), stop = end;
+      if (Number.isFinite(end) && start >= end - FRAME) start = Math.max(0, end - 0.1), stop = end;
+      else if (stop - start < FRAME) stop = start + FRAME;
       const shown = (stop - start) / speed;
       const index = inputs.length;
       inputs.push({ side, start, duration: stop - start });
