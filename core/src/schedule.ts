@@ -1,4 +1,4 @@
-import { compile, compileTemplate, type Scope } from './expr.ts';
+import { compile, compileTemplate, withClock, type Scope } from './expr.ts';
 import type { AppSpec } from './spec.ts';
 import { sunTimes } from './sun.ts';
 
@@ -25,7 +25,7 @@ export function occurrences(spec: AppSpec, scope: Scope, now: number, location: 
   const items: Occurrence[] = [];
   const end = new Date(now); end.setDate(end.getDate() + Math.min(14, Math.max(0, days)));
   for (const [key, entry] of Object.entries(spec.schedule ?? {})) {
-    if (entry.if && !compile(entry.if)(scope)) continue;
+    const ifFn = entry.if ? compile(entry.if) : null;
     const at = typeof entry.at === 'string' ? template(entry.at, scope) : entry.at;
     for (let i = 0; i <= Math.min(14, days); i++) {
       const d = new Date(now); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + i);
@@ -44,7 +44,17 @@ export function occurrences(spec: AppSpec, scope: Scope, now: number, location: 
         if (typeof value === 'number') time = value + (solar.offset ?? 0) * 60000;
       }
       if (time == null || !Number.isFinite(time) || time <= now || time > end.getTime()) continue;
-      items.push({ id: `${key}-${dateKey(d)}`, at: time, title: String(template(entry.title ?? spec.name, scope) ?? ''), body: String(template(entry.body ?? '', scope) ?? ''), sound: entry.sound, alarm: entry.alarm === true, app: spec.id, open: entry.open ?? spec.start ?? Object.keys(spec.screens)[0] });
+      // Conditions and text read the occurrence's time, not the real clock.
+      let show = true;
+      let title = '';
+      let body = '';
+      withClock(time, () => {
+        if (ifFn && !ifFn(scope)) { show = false; return; }
+        title = String(template(entry.title ?? spec.name, scope) ?? '');
+        body = String(template(entry.body ?? '', scope) ?? '');
+      });
+      if (!show) continue;
+      items.push({ id: `${key}-${dateKey(d)}`, at: time, title, body, sound: entry.sound, alarm: entry.alarm === true, app: spec.id, open: entry.open ?? spec.start ?? Object.keys(spec.screens)[0] });
     }
   }
   return items.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id)).slice(0, 64);

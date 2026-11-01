@@ -86,6 +86,25 @@ test("validation catches unknown types, bad actions and expressions that don't r
   assert.match(errors, /value:/);
 });
 
+test("validation compiles action expressions, and an empty value means empty", () => {
+  const actionSpec = (to: string): AppSpec => ({
+    id: "a", name: "A", state: { x: 0 },
+    screens: { main: { body: { type: "button", label: "Go", onTap: { set: "x", to } } } },
+  });
+  assert.match(validateSpec(actionSpec("1 +")).join("\n"), /\.to/);
+  assert.deepEqual(validateSpec(actionSpec("")), []);
+  assert.deepEqual(validateSpec(actionSpec("  ")), []);
+  const onTap = (tap: unknown): string => validateSpec({
+    id: "a", name: "A", data: { items: { type: "list", default: [] } },
+    scripts: { tools: { code: "exports.go = () => 1", exports: ["go"], elements: [] } },
+    screens: { main: { body: { type: "button", label: "Go", onTap: tap } } },
+  } as AppSpec).join("\n");
+  assert.match(onTap({ push: "items", value: { name: "'a' +" } }), /\.value\.name/);
+  assert.match(onTap({ remove: "items", where: "item.done ==" }), /\.where/);
+  assert.match(onTap({ if: "1 <", then: { push: "items", value: "1" } }), /onTap: /);
+  assert.match(onTap({ run: "tools.go", args: { text: "1 +" } }), /\.args\.text/);
+  assert.equal(onTap({ run: "tools.go", args: { text: "'ok'" } }), "");
+});
 test("an edit applies a patch, repairs a rejected one, and finishes", async () => {
   const { rt, requests, idle, edit } = setup([
     toolCall("apply_patch", { patch: [{ op: "replace", path: "/screens/main/title", value: "{{len(chores) +}}" }] }, "Renaming the main screen."),

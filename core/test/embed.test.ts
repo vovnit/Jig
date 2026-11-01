@@ -115,6 +115,22 @@ test("an edited spec hot-reloads the embedded app and keeps its data", () => {
   assert.ok([...child.nodes.values()].some((n) => n.props.value === "Total 5"));
 });
 
+test("an embedded title leaves room for the shell's buttons", () => {
+  const titleOf = (child: ReturnType<typeof boot>["rt"]) =>
+    [...child.nodes.values()].find((n) => n.type === "text" && n.props.value === "Inner")!;
+  const plain = boot(shell());
+  plain.rt.dispatch(byText(plain.rt, "Open")!.id, "tap");
+  frame(plain.host);
+  const wide = titleOf(plain.rt.children[0]);
+
+  const inset = boot(shell({ headerInset: 180 }));
+  inset.rt.dispatch(byText(inset.rt, "Open")!.id, "tap");
+  frame(inset.host);
+  const narrow = titleOf(inset.rt.children[0]);
+  assert.equal(wide.box.padding[1], 0);
+  assert.equal(narrow.box.padding[1], 180);
+  assert.ok(Math.abs(narrow.frame[2] - wide.frame[2] - 180) < 1, `widths ${wide.frame[2]} and ${narrow.frame[2]}`);
+});
 test("the shell lists the seeded apps, runs one, and goes back home", async () => {
   const { readFileSync } = await import("node:fs");
   const load = (n: string): AppSpec => JSON.parse(readFileSync(new URL(`../../specs/${n}.json`, import.meta.url), "utf8"));

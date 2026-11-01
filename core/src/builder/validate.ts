@@ -150,9 +150,19 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
       needCap(where, cap);
     }
   };
+  /** An action expression string compiles; an empty one means "". */
+  const checkExpr = (v: unknown, where: string): void => {
+    if (typeof v !== "string" || v.trim() === "") return;
+    try {
+      compile(v);
+    } catch (e) {
+      errors.push(`${where}: ${(e as Error).message}`);
+    }
+  };
   /** An action value is an expression string, or an object whose values are expressions. `now()` here is a timestamp. */
   const checkValue = (v: unknown, where: string, scope: Set<string>): void => {
     if (typeof v === "string") {
+      checkExpr(v, where);
       needLive(where, freeIdentifiers(v), scope, false);
       needShared(where, v, scope);
     } else if (v && typeof v === "object" && !Array.isArray(v)) {
@@ -173,7 +183,8 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
         if (branch.else) checkActions(branch.else, `${w}.else`, scope);
       } else if ("run" in a) {
         // Custom code: names `<script>.<export>`; a script's `network` asks through the gate, no capability needed.
-        const r = a as { run?: unknown; then?: unknown; else?: unknown };
+        const r = a as { run?: unknown; args?: unknown; then?: unknown; else?: unknown };
+        if (r.args !== undefined) checkValue(r.args, `${w}.args`, scope);
         if (typeof r.run === "string" && !r.run.includes("{{") && !scriptExports.includes(r.run)) {
           const near = closest(r.run, scriptExports);
           errors.push(`${w}.run: no script export '${r.run}'${near ? `; did you mean '${near}'?` : ""}`);
@@ -185,6 +196,7 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
       else if ("if" in a) {
         const c = a as Extract<Action, { if: string }>;
         if (typeof c.if === "string") {
+          checkExpr(c.if, w);
           needLive(w, freeIdentifiers(c.if), scope, false);
           needShared(w, c.if, scope);
         }
@@ -204,10 +216,12 @@ export function specProblems(spec: unknown): { errors: string[]; unfinished: str
         const r = a as { remove?: unknown; at?: unknown; where?: unknown };
         needWritable(w, r.remove, scope);
         if (typeof r.at === "string") {
+          checkExpr(r.at, `${w}.at`);
           needLive(`${w}.at`, freeIdentifiers(r.at), scope, false);
           needShared(`${w}.at`, r.at, scope);
         }
         if (typeof r.where === "string") {
+          checkExpr(r.where, `${w}.where`);
           needLive(`${w}.where`, freeIdentifiers(r.where), scope, false);
           needShared(`${w}.where`, r.where, scope);
         }

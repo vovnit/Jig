@@ -216,6 +216,8 @@ export class Runtime {
   onInteraction?: (app: string, e: Interaction) => void;
   /** The runtime this one is embedded in, if any; events bubble up through it. */
   parent: Runtime | null = null;
+  /** Right inset of the screen title, so it wraps before the shell's overlay buttons. */
+  headerInset = 0;
   snapshot(): Record<string, unknown> { return Object.fromEntries([...this.signals].map(([k, v]) => [k, v.peek()])); }
   onStats?: (s: FrameStats) => void;
 
@@ -964,7 +966,7 @@ export class Runtime {
         style: { paddingX: 20, paddingTop: 8, paddingBottom: 8, gap: 2, align: "start" },
         children: [
           ...(canGoBack ? [{ type: "button", variant: "plain", label: "‹ Back", onTap: { back: true } } as NodeSpec] : []),
-          ...(screen.title ? [{ type: "text", variant: "largeTitle", value: screen.title }] : []),
+          ...(screen.title ? [{ type: "text", variant: "largeTitle", value: screen.title, ...(canGoBack || !(this.headerInset > 0) ? {} : { style: { paddingRight: this.headerInset } }) }] : []),
         ],
       });
     }
@@ -1298,6 +1300,7 @@ export class Runtime {
       const screen = typeof spec.screen === "string" ? str(this.evalTemplate(spec.screen, scope, `${where}.screen`)) : undefined;
       const scale = Number(typeof spec.scale === "string" ? this.evalTemplate(spec.scale, scope, `${where}.scale`) : (spec.scale ?? 1)) || 1;
       const interactive = (typeof spec.interactive === "string" ? this.evalTemplate(spec.interactive, scope, `${where}.interactive`) : spec.interactive) !== false;
+      const headerInset = Number(typeof spec.headerInset === "string" ? this.evalTemplate(spec.headerInset, scope, `${where}.headerInset`) : (spec.headerInset ?? 0)) || 0;
       const selecting = Boolean(typeof spec.selecting === "string" ? this.evalTemplate(spec.selecting, scope, `${where}.selecting`) : spec.selecting);
       untrack(() => {
         e.interactive = interactive;
@@ -1310,6 +1313,8 @@ export class Runtime {
           e.size = null;
           this.setProp(node, "contentScale", scale);
         }
+        const insetChanged = headerInset !== e.rt.headerInset;
+        if (insetChanged) e.rt.headerInset = headerInset;
         let app = value;
         if (typeof app === "string") {
           try {
@@ -1320,7 +1325,10 @@ export class Runtime {
         }
         if (!app || typeof app !== "object" || !(app as AppSpec).screens) return;
         // The same spec again (another app in the list changed): keep the running one as it is.
-        if (app === e.spec && (screen ?? null) === e.rt.pinned) return;
+        if (app === e.spec && (screen ?? null) === e.rt.pinned) {
+          if (insetChanged && e.rt.spec) e.rt.load(e.rt.spec, { screen: e.rt.pinned ?? undefined });
+          return;
+        }
         const fresh = (app as AppSpec).id !== e.rt.spec?.id;
         e.spec = app;
         e.rt.load(app as AppSpec, { fresh, screen });
@@ -2564,6 +2572,8 @@ export class Runtime {
 
   /** An action condition or value: compiled without subscribing to live values. */
   private evalAction(src: string, scope: Scope, where: string): unknown {
+    // Models clear a field with an empty string; it means "", not a broken expression.
+    if (src.trim() === '') return '';
     let fn: Compiled;
     try {
       fn = compile(src);

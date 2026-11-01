@@ -282,6 +282,7 @@
           {
             "type": "app",
             "spec": "{{find(apps, a => a.id == params.id).spec}}",
+            "headerInset": "{{find(apps, a => a.id == params.id).learning ? 250 : 180}}",
             "style": {
               "width": "100%",
               "height": "100%"

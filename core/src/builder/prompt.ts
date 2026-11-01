@@ -59,11 +59,12 @@ Colors: theme tokens ${Object.keys(DEFAULT_THEME).join(", ")}, or #hex. Prefer t
 
 ## Expressions
 JS-like: + - * / % == != < > <= >= && || ! ?: ?? ?., member access, [index], arrow functions (x => ...), object and array literals. No assignment, no method calls: use functions. Functions: ${Object.keys(BUILTINS).join(", ")}.
+Signatures: plural(n, one, many?) includes n ("3 plants"; many defaults to one + "s"); formatDate(v, fmt = "MMM d") tokens yyyy MMM MM dd d EEE HH H hh h mm a, anything else literal (no named formats like 'medium'); today() "YYYY-MM-DD", now() epoch ms, addDays(date, n) "YYYY-MM-DD", daysBetween(a, b) whole days a to b; fixed(v, digits) string, pct(fraction) "40%"; count(list, fn?), sum(list, fn?), sort(list, fn, dir?), filter/map/find/some/every(list, fn) take an arrow fn or a field name.
 Scope: data and state keys, the "as" variable inside each/list rows, "params" (the screen's navigation params).
 
 ## Actions (onTap, onChange, onSubmit, swipe do), one or an array run in order
 {"set": "path", "to": expr} · {"toggle": "path"} · {"push": "listKey", "value": {field: expr}} · {"remove": "item"} (inside a list row or each) · {"remove": "listKey", "where": "expr on item"} · {"navigate": "screen", "params": {k: expr}} · {"back": true} · {"if": expr, "then": actions, "else": actions}
-Paths may go into a row's item: {"toggle": "chore.done"}.
+Paths may go into a row's item: {"toggle": "chore.done"}. String literals in action values are quoted inside the expression ({"set": "x", "to": "'done'"}); "to": "" clears a value.
 
 ## Media
 Use audio with src "@chime", "@gentle", or "@alarm" for bundled sounds, or an https URL. Bind playing to a boolean state, toggle it from a button, and reset it in onEnded. onTime gets value = {position, duration} in seconds. Audio has no visible size; give video an aspectRatio and controls. Async action argument strings are expressions: quote literal text inside the expression.

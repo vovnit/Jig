@@ -52,6 +52,23 @@ test('schedule validates capabilities, times, weekdays and destination screens',
   s.schedule!.morning.at = '25:90';
   assert.ok(validateSpec(s).some(e => e.includes('at')));
 });
+test('schedule conditions and titles read each occurrence time', () => {
+  const pad2 = (v: number) => String(v).padStart(2, '0');
+  const base = new Date(2026, 9, 26);
+  const last = `${base.getFullYear()}-${pad2(base.getMonth() + 1)}-${pad2(base.getDate())}`;
+  const now = new Date(2026, 9, 26, 8).getTime();
+  const spec: AppSpec = { id: 'plants', name: 'Plants', schedule: { water: { at: '09:00', if: '{{daysBetween(last, today()) >= 3}}' } }, screens: { main: { body: { type: 'text', value: 'Main' } } } };
+  const items = occurrences(spec, scope({ last }), now);
+  assert.ok(items.length > 0);
+  assert.equal(items[0].id, 'water-2026-10-29');
+  assert.equal(new Date(items[0].at).getHours(), 9);
+  assert.ok(!items.some((i) => ['water-2026-10-26', 'water-2026-10-27', 'water-2026-10-28'].includes(i.id)));
+
+  const titled: AppSpec = { id: 'plants', name: 'Plants', schedule: { water: { at: '09:00', title: '{{today()}}' } }, screens: { main: { body: { type: 'text', value: 'Main' } } } };
+  const withTitles = occurrences(titled, scope({}), now);
+  assert.equal(withTitles[0].title, '2026-10-26');
+  assert.equal(withTitles[1].title, '2026-10-27');
+});
 test('container schedules closed apps, clears revoked and deleted apps, and opens notification destination', async () => {
   const shell = JSON.parse(readFileSync(new URL('../../specs/shell.json', import.meta.url), 'utf8')) as AppSpec;
   const { host, rt } = boot(shell, undefined, undefined, { trusted: true });

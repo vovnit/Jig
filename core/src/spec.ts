@@ -338,7 +338,7 @@ export const NODE_TYPES: Record<string, NodeTypeInfo> = {
   },
   app: {
     doc: "another app embedded (the shell's)",
-    props: { spec: "any", screen: "string", scale: "number", interactive: "boolean", selecting: "boolean", onSelect: "actions" },
+    props: { spec: "any", screen: "string", scale: "number", interactive: "boolean", selecting: "boolean", headerInset: "number", onSelect: "actions" },
   },
   custom: {
     doc: "a custom element from the app's scripts (its function returns the node tree)",

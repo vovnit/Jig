@@ -289,3 +289,17 @@ test("style.transition is normalized for hosts", () => {
   const styles = [...rt.nodes.values()].filter((n) => n.type === "spacer").map((n) => (n.props.style as { transition?: unknown } | undefined)?.transition);
   assert.deepEqual(styles, [{ duration: 200, easing: "ease" }, { duration: 400, easing: "spring" }, undefined]);
 });
+
+test("an empty action value clears the field without an error", () => {
+  const spec: AppSpec = {
+    id: "clear",
+    name: "Clear",
+    state: { name: "hi" },
+    screens: { main: { body: { type: "button", label: "Clear", onTap: [{ set: "name", to: "" }] } } },
+  };
+  const { host, rt } = boot(spec);
+  rt.dispatch(byText(rt, "Clear")!.id, "tap");
+  frame(host);
+  assert.equal(rt.get("name"), "");
+  assert.deepEqual(rt.errors, []);
+});

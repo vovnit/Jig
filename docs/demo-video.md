@@ -13,6 +13,7 @@ npm run dev            # playground at http://localhost:5173
 - `META_API_KEY` in the repo's `.env` lets the playground build apps with nothing entered. The native apps need the key in the shell's Settings.
 - Start each take from a clean slate: clear the site data for `localhost:5173` (DevTools → Application → Clear site data) and reload, which removes generated apps and grants. **Reset app data** (bottom left) resets only the app that's open, e.g. open Pantry and reset it to restore its three items.
 - Make the browser window about 1280×900 so the phone frame and the inspector both fit.
+- Allow browser notifications for `localhost:5173`. Otherwise the inspector shows a red "schedule: Notifications denied" once an app queues a reminder.
 - Keep the playground's window in front while recording. A hidden or background tab throttles animation frames, so screen transitions freeze halfway and saves are delayed.
 
 ## Recording commands
@@ -65,7 +66,7 @@ Shows generation, validation and repair, Muse Image icons, a notification permis
 4. Add "Monstera" (7 days) and "Boston fern" (3 days). Tap **Water**.
 5. **Change**, then **Screen**, then **Select**, and tap the button on a plant row ([frame](demo/1e-select.jpg)). Type:
    > Make this a Water button that's filled green only when the plant is due, and show the due plants' names in red
-6. The model changes the app, takes a screenshot of it, and fixes a glitch it saw on its own. In the rehearsal it fixed the doubled numbers ("2 2 plants") without being asked ([frame](demo/1f-edit-log.jpg)). Result with a due plant: [frame](demo/1g-plants-after-edit.jpg).
+6. The model changes the app, then takes a screenshot to check it, and fixes anything that looks off ([frame](demo/1f-edit-log.jpg)). In the rehearsal it fixed doubled numbers ("2 2 plants") without being asked. That bug is fixed now, so expect a different catch or none. Result with a due plant: [frame](demo/1g-plants-after-edit.jpg).
 
 **Reminder while closed:** film this on the iPhone simulator, where reminders are real OS notifications. The web playground only uses browser timers. For a quick take, ask the builder to "move the reminder to <two minutes from now>", keep one plant due, go to the home screen and wait for the banner.
 
@@ -90,14 +91,14 @@ Shows `ask`: an app calling Meta's model without ever seeing the key.
 3. Open it, keep the prefilled fridge list (or type "eggs, rice, frozen peas, soy sauce, chicken breast"), tap **Suggest 3 dinners**, then **Allow** the AI permission. Three recipe cards arrive in about 20 s ([frame](demo/3a-dinner-ideas.jpg)).
 4. **Save to favorites**, scroll to Favorites, tap it: a recipe screen with ingredients and steps ([frame](demo/3b-recipe.jpg)).
 
-## Fix before recording
+## Fixed after the rehearsal
 
-Found in the rehearsal, most important first:
+The rehearsal found four problems, all fixed since:
 
-1. **Reminders for days ahead never fire.** `occurrences()` checks a schedule's `if` once, against today's data ([schedule.ts:28](../core/src/schedule.ts)). A plant that comes due in three days, while the app stays closed, gets no 9 am reminder. Fix: check `if` for each occurrence with the clock set to that time (`withClock`).
-2. **`{"set": "x", "to": ""}` fails at runtime** ("Unexpected token in: "). The model wrote it in two of three apps, to clear a text field, and the red error shows under the inspector on camera. Validation doesn't compile action expressions, so the repair loop never sees it. Fix: compile every action expression when validating, and/or treat `""` as an empty string.
-3. **The prompt lists function names without signatures** ([prompt.ts:61](../core/src/builder/prompt.ts)). The model guessed wrong twice: `plural(n, 'plant', 'plants')` already includes the number, which gave "2 2 plants total", and `formatDate(d, 'medium')` printed "me27ium". Fix: give the few ambiguous builtins a signature and an example.
-4. **Long app titles run under Change and Done** in the shell ("Shopping Lis", "What's for di").
+1. **Reminders for days ahead never fired.** `occurrences()` checked a schedule's `if` once, against today's data, so a plant that came due in three days, while the app stayed closed, got no reminder. Now `if`, the title and the body are checked at each occurrence's own time.
+2. **`{"set": "x", "to": ""}` failed at runtime**, which the model wrote in two of three apps to clear a text field. An empty action value now means `""`. Validation now also compiles every action expression, so the repair loop catches syntax errors before anyone taps.
+3. **The model guessed builtin signatures.** It wrote "2 2 plants total" with `plural`, and "me27ium" with `formatDate(d, 'medium')`. The prompt now gives signatures for those builtins and a few others. A regenerated plant app used both correctly.
+4. **Long app titles ran under Change and Done.** The shell now reserves room for them, and long titles wrap to a second line.
 
 ## Rehearsal results (Nov 1)
 
@@ -105,7 +106,8 @@ Found in the rehearsal, most important first:
 | --- | --- | --- | --- |
 | Plant care | 35 s | 1 | Add, water, due list, schedule queued while a plant is due; label glitches until the edit |
 | Plant care edit | 40 s | 0 | Water button and red names; it fixed the doubled numbers on its own |
-| Shopping list | 35 s | 1 | Reads Pantry live, check off, clear; `to: ""` error |
-| Dinner ideas | ~150 s | 2 | Three recipes from the model, favorites, detail screen; `to: ""` error |
+| Shopping list | 35 s | 1 | Reads Pantry live, check off, clear; `to: ""` error (fixed) |
+| Dinner ideas | ~150 s | 2 | Three recipes from the model, favorites, detail screen; `to: ""` error (fixed) |
+| Plant care, after the fixes | ~50 s | 3 | Labels clean ("0 due today • 0 plants", "Every 7 days"); reminders queued from the day a plant comes due |
 
 Not rehearsed yet: the native takes (iOS and Android, with the key entered in Settings), the closed-app notification, and the SAM photo count.
