@@ -8,8 +8,9 @@
 // script), demo/out/<name>-side-by-side.mp4 and the timeline from demo-compose.mjs, and
 // writes demo/out/jig-demo.mp4 (captions burned in and as a subtitle track) and
 // demo/out/jig-demo.srt. Sections animate demo/animations/scenes.html (demo-animate.mjs)
-// and last as long as their lines need. Without --voice nothing calls ElevenLabs: each
-// line lasts its reading time. With --voice (ELEVENLABS_API_KEY set) lines are voiced
+// and last as long as their lines need. Without --voice nothing calls a voice service:
+// each line lasts its reading time. With --voice, lines are voiced by the provider in
+// narration.json (Fish Audio with FISH_API_KEY, or ElevenLabs with ELEVENLABS_API_KEY)
 // and cached in demo/out/voice. An optional demo/out/music.mp3 plays underneath.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -48,22 +49,41 @@ function probe(path, entries) {
 }
 
 const voiced = process.argv.includes("--voice");
-const key = process.env.ELEVENLABS_API_KEY;
-if (voiced && !key) throw new Error("--voice needs ELEVENLABS_API_KEY.");
 
 /** A caption's text: the line without its performance tags ("[excited]"). */
 const caption = (s) => s.replace(/\[[^\]]*\]\s*/g, "").trim();
 
+// The voice-over providers. Both take "[tag]" performance cues in the text.
+const PROVIDERS = {
+  // Fish Audio: POST /v1/tts with the model in a header; the voice is a model id.
+  fish: {
+    key: "FISH_API_KEY",
+    request: (n, text, key) => fetch("https://api.fish.audio/v1/tts", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json", model: n.model },
+      body: JSON.stringify({ text, reference_id: n.voice, format: "mp3", mp3_bitrate: 192, normalize: true, latency: "normal", ...(n.settings ?? {}) }),
+    }),
+  },
+  elevenlabs: {
+    key: "ELEVENLABS_API_KEY",
+    request: (n, text, key) => fetch(`https://api.elevenlabs.io/v1/text-to-speech/${n.voice}?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: { "xi-api-key": key, "Content-Type": "application/json", Accept: "audio/mpeg" },
+      body: JSON.stringify({ text, model_id: n.model, ...(n.settings ? { voice_settings: n.settings } : {}) }),
+    }),
+  },
+};
+
 async function voice(text, n) {
-  const id = createHash("sha256").update(JSON.stringify([n.voice, n.model, n.settings ?? null, text])).digest("hex").slice(0, 16);
+  const provider = PROVIDERS[n.provider ?? "elevenlabs"];
+  if (!provider) throw new Error(`Unknown voice provider '${n.provider}'`);
+  const id = createHash("sha256").update(JSON.stringify([n.provider, n.voice, n.model, n.settings ?? null, text])).digest("hex").slice(0, 16);
   const file = join(voiceDir, `${id}.mp3`);
   if (existsSync(file)) return file;
-  const res = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${n.voice}?output_format=mp3_44100_128`, {
-    method: "POST",
-    headers: { "xi-api-key": key, "Content-Type": "application/json", Accept: "audio/mpeg" },
-    body: JSON.stringify({ text, model_id: n.model, ...(n.settings ? { voice_settings: n.settings } : {}) }),
-  });
-  if (!res.ok) throw new Error(`ElevenLabs ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  const key = process.env[provider.key];
+  if (!key) throw new Error(`--voice with ${n.provider} needs ${provider.key}.`);
+  const res = await provider.request(n, text, key);
+  if (!res.ok) throw new Error(`${n.provider} ${res.status}: ${(await res.text()).slice(0, 300)}`);
   writeFileSync(file, Buffer.from(await res.arrayBuffer()));
   return file;
 }

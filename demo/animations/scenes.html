@@ -182,143 +182,165 @@ function badge(x, y, s, icon, alpha) {
 // ---------- Scenes: each draws the right half (x 900…1820) ----------
 const SCENES = {};
 
+// Layout rule for every scene: the right half spans x 900…1820, everything stays above
+// y 900 (closed captions sit below), and connectors are at least ~60 px long.
+
 // 1. A sentence becomes a spec, and the spec runs on three platforms.
 SCENES.spec = (t) => {
   const sentence = "“Track my houseplants and remind me at 9 am”";
   const p1 = seg(t, 0.4, 2.6);
-  card(960, 150, 820, 92, { alpha: easeOut(seg(t, 0.2, 0.6)) });
-  text(typed(sentence, p1), 990, 196, { size: 30, weight: 500 });
+  card(960, 100, 820, 84, { alpha: easeOut(seg(t, 0.2, 0.6)) });
+  const typedW = text(typed(sentence, p1), 990, 142, { size: 30, weight: 500 });
   ctx.fillStyle = C.ink;
-  if (p1 > 0 && p1 < 1 && Math.floor(t * 3) % 2 === 0) ctx.fillRect(990 + text(typed(sentence, p1), -9999, -9999, { size: 30, weight: 500 }) + 4, 178, 3, 36);
-  arrow(1370, 252, 1370, 300, easeOut(seg(t, 2.6, 3.0)));
+  if (p1 > 0 && p1 < 1 && Math.floor(t * 3) % 2 === 0) ctx.fillRect(994 + typedW, 125, 3, 34);
+  arrow(1370, 192, 1370, 262, easeOut(seg(t, 2.6, 3.0)));
   // The model, pulsing while it writes.
   const mp = easeOut(seg(t, 2.8, 3.3));
   const pulse = 1 + 0.06 * Math.sin(t * 6) * seg(t, 3.0, 3.4) * (1 - seg(t, 6.4, 6.8));
   ctx.save(); ctx.globalAlpha = mp;
-  glow(1370, 350, 180 * pulse, "rgba(184,97,255,0.35)");
-  const g = ctx.createLinearGradient(1250, 310, 1490, 390); g.addColorStop(0, C.accent); g.addColorStop(1, C.violet);
-  rr(1250, 312, 240, 76, 38); ctx.fillStyle = g; ctx.fill();
-  text("Muse Spark", 1370, 350, { size: 30, weight: 700, align: "center" });
+  glow(1370, 302, 170 * pulse, "rgba(184,97,255,0.35)");
+  const g = ctx.createLinearGradient(1250, 270, 1490, 336); g.addColorStop(0, C.accent); g.addColorStop(1, C.violet);
+  rr(1250, 270, 240, 66, 33); ctx.fillStyle = g; ctx.fill();
+  text("Muse Spark", 1370, 303, { size: 30, weight: 700, align: "center" });
   ctx.restore();
-  arrow(1370, 398, 1370, 440, easeOut(seg(t, 3.3, 3.6)));
+  arrow(1370, 344, 1370, 410, easeOut(seg(t, 3.3, 3.6)));
   // The spec, typed with syntax colors.
   const specLines = [
     ["{", C.soft], ['  "screens": { "main": … },', C.ink], ['  "data": { "plants": "list" },', C.ink],
     ['  "actions": { "water": … },', C.ink], ['  "schedule": { "at": "09:00" }', C.amber], ["}", C.soft],
   ];
   const sp = seg(t, 3.5, 6.2);
-  card(1080, 448, 580, 250, { alpha: easeOut(seg(t, 3.4, 3.7)), fill: C.code });
+  card(1080, 418, 580, 230, { alpha: easeOut(seg(t, 3.4, 3.7)), fill: C.code });
   specLines.forEach(([l, col], i) => {
     const lp = clamp(sp * specLines.length - i);
-    text(typed(l, lp), 1110, 486 + i * 36, { size: 24, weight: 500, mono: true, color: col });
+    text(typed(l, lp), 1110, 450 + i * 34, { size: 23, weight: 500, mono: true, color: col });
   });
   // Three platforms render it.
-  const outs = [["iPhone", 1000], ["Android", 1290], ["Web", 1580]];
+  const outs = [["iPhone", 1040], ["Android", 1370], ["Web", 1700]];
   outs.forEach(([name, x], i) => {
     const op = easeOut(seg(t, 6.4 + i * 0.25, 7.2 + i * 0.25));
     if (op <= 0) return;
-    arrow(1370, 708, x + 100, 760, op, { alpha: op, lw: 3 });
-    const yy = 770 + (1 - op) * 40;
+    arrow(1370, 656, x, 712, op, { alpha: op, lw: 3 });
+    const yy = 722 + (1 - op) * 30;
     if (name === "Web") {
-      card(x, yy, 210, 210, { alpha: op, fill: "#f5f6fa", r: 14 });
-      ctx.save(); ctx.globalAlpha = op; ctx.fillStyle = "#d9dce6"; rr(x, yy, 210, 26, 14); ctx.fill();
-      ["#ff6b6b", "#ffc857", "#38d39f"].forEach((c, k) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x + 18 + k * 16, yy + 13, 5, 0, 7); ctx.fill(); });
-      ctx.save(); ctx.beginPath(); ctx.rect(x, yy + 26, 210, 184); ctx.clip(); miniApp(x, yy + 10, 210, 200); ctx.restore(); ctx.restore();
-    } else phone(x + 40, yy, 120, 230, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh), { alpha: op });
-    text(name, x + 100, yy + 252, { size: 22, color: C.soft, align: "center", alpha: op });
+      const w = 190, h = 140;
+      card(x - w / 2, yy, w, h, { alpha: op, fill: "#f5f6fa", r: 12 });
+      ctx.save(); ctx.globalAlpha = op; ctx.fillStyle = "#d9dce6"; rr(x - w / 2, yy, w, 22, 12); ctx.fill();
+      ["#ff6b6b", "#ffc857", "#38d39f"].forEach((c, k) => { ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x - w / 2 + 16 + k * 14, yy + 11, 4, 0, 7); ctx.fill(); });
+      ctx.save(); ctx.beginPath(); ctx.rect(x - w / 2, yy + 22, w, h - 22); ctx.clip(); miniApp(x - w / 2, yy + 4, w, h); ctx.restore(); ctx.restore();
+    } else phone(x - 44, yy, 88, 150, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh), { alpha: op });
+    text(name, x, yy + 168, { size: 21, color: C.soft, align: "center", alpha: op });
   });
 };
 
 // 2. A change passes the schema and a headless render, or goes back for repair.
-SCENES.validate = (t, D) => {
-  const gates = [["JSON Schema", 1180], ["Headless render", 1420], ["Live", 1660]];
+SCENES.validate = (t) => {
+  const MS = { x: 900, y: 360, w: 150, h: 120 };
+  const gates = [["JSON Schema", 1250], ["Headless render", 1490], ["Live", 1730]];
+  const GW = 150, GY = 280, GH = 280;
+  const a0 = easeOut(seg(t, 0.2, 0.6));
+  card(MS.x, MS.y, MS.w, MS.h, { alpha: a0, fill: "rgba(107,122,255,0.25)", stroke: C.accent });
+  text("Muse", MS.x + MS.w / 2, MS.y + 46, { size: 24, weight: 700, align: "center", alpha: a0 });
+  text("Spark", MS.x + MS.w / 2, MS.y + 76, { size: 24, weight: 700, align: "center", alpha: a0 });
   gates.forEach(([name, x], i) => {
     const a = easeOut(seg(t, 0.3 + i * 0.2, 0.8 + i * 0.2));
-    card(x - 90, 300, 180, 300, { alpha: a, r: 26 });
-    text(name, x, 640, { size: 24, color: C.soft, align: "center", alpha: a });
+    card(x - GW / 2, GY, GW, GH, { alpha: a, r: 24 });
+    text(name, x, GY + GH + 34, { size: 22, color: C.soft, align: "center", alpha: a });
   });
-  card(860 + 60, 380, 150, 140, { alpha: easeOut(seg(t, 0.2, 0.6)), fill: "rgba(107,122,255,0.25)", stroke: C.accent });
-  text("Muse Spark", 995, 450, { size: 24, weight: 700, align: "center", alpha: easeOut(seg(t, 0.2, 0.6)) });
+  // Connectors: the model into the first gate, and gate to gate.
+  arrow(MS.x + MS.w + 10, 420, gates[0][1] - GW / 2 - 12, 420, easeOut(seg(t, 0.6, 1.0)), { lw: 3, alpha: 0.6 });
+  arrow(gates[0][1] + GW / 2 + 10, 420, gates[1][1] - GW / 2 - 12, 420, easeOut(seg(t, 0.8, 1.2)), { lw: 3, alpha: 0.6 });
+  arrow(gates[1][1] + GW / 2 + 10, 420, gates[2][1] - GW / 2 - 12, 420, easeOut(seg(t, 1.0, 1.4)), { lw: 3, alpha: 0.6 });
   // First pass: the schema catches a typo.
-  const pass1 = easeInOut(seg(t, 1.2, 2.6));
-  const px1 = lerp(1080, 1180, pass1);
-  if (t < 4.6) specChip(px1, 450, t < 2.6 ? "change" : "change", C.accent);
-  cross(1180, 340, 26, seg(t, 2.6, 3.0));
-  if (t > 2.8 && t < 5.2) {
-    card(1030, 690, 420, 70, { alpha: easeOut(seg(t, 2.8, 3.1)) * (1 - seg(t, 4.9, 5.2)), stroke: C.red });
-    text("unknown style key 'colour'", 1240, 725, { size: 24, mono: true, color: C.red, align: "center", alpha: easeOut(seg(t, 2.8, 3.1)) * (1 - seg(t, 4.9, 5.2)) });
+  if (t >= 1.2 && t < 4.6) specChip(lerp(1120, gates[0][1], easeInOut(seg(t, 1.2, 2.6))), 420, "change", C.accent);
+  cross(gates[0][1], GY + 40, 24, seg(t, 2.6, 3.0));
+  const errA = easeOut(seg(t, 2.8, 3.1)) * (1 - seg(t, 4.9, 5.2));
+  if (errA > 0) {
+    card(gates[0][1] + 30, 640, 420, 64, { alpha: errA, stroke: C.red });
+    text("unknown style key 'colour'", gates[0][1] + 240, 672, { size: 23, mono: true, color: C.red, align: "center", alpha: errA });
   }
   // Errors go back; the model repairs.
   const back = easeInOut(seg(t, 3.4, 4.6));
+  const loopA = seg(t, 3.3, 3.6) * (1 - seg(t, 5.0, 5.4));
+  if (loopA > 0) {
+    ctx.save(); ctx.globalAlpha = loopA; ctx.strokeStyle = C.red; ctx.lineWidth = 4; ctx.setLineDash([10, 10]); ctx.lineDashOffset = -t * 60;
+    ctx.beginPath(); ctx.moveTo(gates[0][1], GY + GH + 60); ctx.quadraticCurveTo(1060, 800, MS.x + MS.w / 2, MS.y + MS.h + 12); ctx.stroke(); ctx.restore();
+    text("repair", 1040, 770, { size: 24, weight: 600, color: C.red, align: "center", alpha: loopA });
+  }
   if (back > 0 && back < 1) {
-    ctx.save(); ctx.strokeStyle = C.red; ctx.lineWidth = 4; ctx.setLineDash([10, 10]); ctx.lineDashOffset = -t * 60;
-    ctx.beginPath(); ctx.moveTo(1180, 600); ctx.quadraticCurveTo(1080, 720, 995, 525); ctx.stroke(); ctx.restore();
-    packet(lerp(1180, 995, back), lerp(600, 525, back) + Math.sin(back * Math.PI) * 120, "rgb(255,107,107)", 9);
+    const u = 1 - back;
+    const bx = u * u * gates[0][1] + 2 * u * back * 1060 + back * back * (MS.x + MS.w / 2);
+    const by = u * u * (GY + GH + 60) + 2 * u * back * 800 + back * back * (MS.y + MS.h + 12);
+    packet(bx, by, "rgb(255,107,107)", 9);
   }
-  text("repair", 1075, 790, { size: 24, color: C.red, align: "center", alpha: seg(t, 3.4, 3.8) * (1 - seg(t, 5.2, 5.6)) });
   // Second pass: all green.
-  const pass2 = easeInOut(seg(t, 5.0, 8.0));
   if (t >= 4.6 && t < 8.0) {
-    const x = pass2 < 0.33 ? lerp(1080, 1180, pass2 / 0.33) : pass2 < 0.66 ? lerp(1180, 1420, (pass2 - 0.33) / 0.33) : lerp(1420, 1660, (pass2 - 0.66) / 0.34);
-    specChip(x, 450, "repaired", C.green);
+    const q = easeInOut(seg(t, 5.0, 8.0));
+    const x = q < 0.33 ? lerp(1120, gates[0][1], q / 0.33) : q < 0.66 ? lerp(gates[0][1], gates[1][1], (q - 0.33) / 0.33) : lerp(gates[1][1], gates[2][1], (q - 0.66) / 0.34);
+    specChip(x, 420, "repaired", C.green);
   }
-  check(1180, 340, 26, seg(t, 5.9, 6.3));
+  check(gates[0][1], GY + 40, 24, seg(t, 5.9, 6.3));
   // The headless render: little screens flip through.
   const rp = seg(t, 6.2, 7.2);
   for (let k = 0; k < 3; k++) {
-    const shown = rp * 3 > k;
-    if (shown) phone(1395 - k * 6, 400 - k * 6, 60, 110, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh), { alpha: 0.5 + 0.5 * (k === Math.min(2, Math.floor(rp * 3))) });
+    if (rp * 3 > k) phone(gates[1][1] - 26 - k * 6, 370 - k * 6, 56, 100, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh), { alpha: 0.5 + 0.5 * (k === Math.min(2, Math.floor(rp * 3))) });
   }
-  check(1420, 340, 26, seg(t, 7.2, 7.6));
-  check(1660, 340, 26, seg(t, 8.0, 8.4));
-  text("Applied", 1660, 450, { size: 32, weight: 700, color: C.green, align: "center", alpha: seg(t, 8.0, 8.4) });
+  check(gates[1][1], GY + 40, 24, seg(t, 7.2, 7.6));
+  check(gates[2][1], GY + 40, 24, seg(t, 8.0, 8.4));
+  text("Applied", gates[2][1], 420, { size: 30, weight: 700, color: C.green, align: "center", alpha: seg(t, 8.0, 8.4) });
 };
 function specChip(x, y, label, color) {
-  rr(x - 66, y - 34, 132, 68, 18); ctx.fillStyle = C.code; ctx.fill(); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
-  text("{ … }", x, y - 8, { size: 22, mono: true, color, align: "center" });
-  text(label, x, y + 18, { size: 16, color: C.soft, align: "center" });
+  rr(x - 60, y - 32, 120, 64, 16); ctx.fillStyle = C.code; ctx.fill(); ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.stroke();
+  text("{ … }", x, y - 8, { size: 21, mono: true, color, align: "center" });
+  text(label, x, y + 17, { size: 15, color: C.soft, align: "center" });
 }
 
 // 3. One runtime sends batches of ops; three hosts draw them.
 SCENES.runtime = (t) => {
   const a = easeOut(seg(t, 0.2, 0.7));
-  card(1110, 160, 520, 250, { alpha: a, fill: "rgba(107,122,255,0.18)", stroke: C.accent });
-  text("Jig runtime · TypeScript", 1370, 200, { size: 28, weight: 700, align: "center", alpha: a });
-  ["state & signals", "bindings", "flexbox layout", "ops batch"].forEach((l, i) => {
+  const B = { x: 1110, y: 100, w: 520, h: 250 };
+  card(B.x, B.y, B.w, B.h, { alpha: a, fill: "rgba(107,122,255,0.18)", stroke: C.accent });
+  text("Jig runtime · TypeScript", B.x + B.w / 2, B.y + 38, { size: 28, weight: 700, align: "center", alpha: a });
+  ["state & signals", "bindings", "flexbox layout", "ops: create · update · frame"].forEach((l, i) => {
     const ap = easeOut(seg(t, 0.6 + i * 0.3, 1.0 + i * 0.3));
     const active = Math.floor(t * 2.5) % 4 === i && t > 2;
-    rr(1150, 236 + i * 40, 440, 32, 10); ctx.save(); ctx.globalAlpha = ap; ctx.fillStyle = active ? "rgba(107,122,255,0.55)" : C.dim; ctx.fill(); ctx.restore();
-    text(l, 1170, 252 + i * 40, { size: 20, mono: true, color: active ? C.ink : C.soft, alpha: ap });
+    rr(B.x + 40, B.y + 72 + i * 42, B.w - 80, 34, 10); ctx.save(); ctx.globalAlpha = ap; ctx.fillStyle = active ? "rgba(107,122,255,0.55)" : C.dim; ctx.fill(); ctx.restore();
+    text(l, B.x + 60, B.y + 89 + i * 42, { size: 20, mono: true, color: i === 3 ? C.amber : active ? C.ink : C.soft, alpha: ap });
   });
-  const hosts = [["JavaScriptCore", "UIKit", 1000], ["QuickJS", "Android Views", 1300], ["Browser", "DOM", 1600]];
+  const HY = 540;
+  const hosts = [["JavaScriptCore", "UIKit", 1040], ["QuickJS", "Android Views", 1370], ["Browser", "DOM", 1700]];
+  const from = { x: B.x + B.w / 2, y: B.y + B.h + 10 };
   hosts.forEach(([eng, ui, x], i) => {
     const hp = easeOut(seg(t, 1.6 + i * 0.2, 2.1 + i * 0.2));
-    card(x - 120, 560, 240, 90, { alpha: hp });
-    text(eng, x, 592, { size: 24, weight: 700, align: "center", alpha: hp });
-    text("→ " + ui, x, 624, { size: 20, color: C.soft, align: "center", alpha: hp });
-    arrow(1370, 420, x, 550, hp, { alpha: 0.35, lw: 2 });
-    phone(x - 55, 690, 110, 210, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh, { filled: (r) => r === Math.floor(t * 1.5) % 3 }), { alpha: hp });
+    card(x - 125, HY, 250, 88, { alpha: hp });
+    text(eng, x, HY + 32, { size: 24, weight: 700, align: "center", alpha: hp });
+    text("→ " + ui, x, HY + 62, { size: 20, color: C.soft, align: "center", alpha: hp });
+    arrow(from.x, from.y, x, HY - 12, hp, { alpha: 0.35, lw: 2 });
+    phone(x - 46, 650, 92, 170, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh, { filled: (r) => r === Math.floor(t * 1.5) % 3 }), { alpha: hp });
   });
   // Packets: one batch per frame, to every host.
   if (t > 2.4) {
-    for (let k = 0; k < 6; k++) {
-      const q = ((t - 2.4) * 0.9 + k / 6) % 1;
+    for (let k = 0; k < 5; k++) {
+      const q = ((t - 2.4) * 0.8 + k / 5) % 1;
       hosts.forEach(([, , x], i) => {
-        const px = lerp(1370, x, easeInOut(q)), py = lerp(420, 550, easeInOut(q));
-        packet(px, py, i === 1 ? "rgb(56,211,159)" : i === 2 ? "rgb(255,200,87)" : "rgb(107,122,255)", 7);
+        const e = easeInOut(q);
+        packet(lerp(from.x, x, e), lerp(from.y, HY - 12, e), i === 1 ? "rgb(56,211,159)" : i === 2 ? "rgb(255,200,87)" : "rgb(107,122,255)", 7);
       });
     }
   }
-  text("ops: create · update · insert · frame", 1370, 470, { size: 22, mono: true, color: C.amber, align: "center", alpha: seg(t, 2.6, 3.2) });
-  text("one batch per frame · hosts only measure text and draw", 1370, 960, { size: 22, color: C.soft, align: "center", alpha: seg(t, 3.0, 3.6) });
+  text("one batch per frame · hosts only measure text and draw", 1370, 862, { size: 22, color: C.soft, align: "center", alpha: seg(t, 3.0, 3.6) });
 };
 
 // 4. Select an element, the model patches its path, then checks a screenshot.
 SCENES.point = (t) => {
   const done = seg(t, 7.6, 8.0);
-  phone(980, 190, 320, 640, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh, { filled: (r) => r === 0 && done > 0 }), { alpha: easeOut(seg(t, 0.2, 0.6)) });
-  // The cursor moves in and taps the first Water button.
-  const cx = lerp(1500, 1222, easeInOut(seg(t, 0.8, 2.0))), cy = lerp(880, 316, easeInOut(seg(t, 0.8, 2.0)));
+  const P = { x: 960, y: 160, w: 300, h: 600 };
+  phone(P.x, P.y, P.w, P.h, (sx, sy, sw, sh) => miniApp(sx, sy, sw, sh, { filled: (r) => r === 0 && done > 0 }), { alpha: easeOut(seg(t, 0.2, 0.6)) });
+  // Where the first Water button sits on that phone.
+  const m = P.w * 0.04, s = (P.w - 2 * m) / 300;
+  const btn = { x: P.x + m + (300 - 84) * s, y: P.y + m + (78 + 9) * s, w: 56 * s, h: 24 * s };
+  const tx = btn.x + btn.w / 2, ty = btn.y + btn.h / 2;
+  const cx = lerp(1500, tx, easeInOut(seg(t, 0.8, 2.0))), cy = lerp(860, ty, easeInOut(seg(t, 0.8, 2.0)));
   const tap = seg(t, 2.0, 2.4);
   if (t > 0.8 && t < 3.4) {
     if (tap > 0) { ctx.save(); ctx.globalAlpha = 1 - tap; ctx.strokeStyle = C.accent; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(cx, cy, 10 + tap * 40, 0, 7); ctx.stroke(); ctx.restore(); }
@@ -329,47 +351,52 @@ SCENES.point = (t) => {
   if (t > 2.2) {
     const pulse = 0.6 + 0.4 * Math.sin(t * 6);
     ctx.save(); ctx.strokeStyle = C.accent; ctx.lineWidth = 3 + pulse * 2; ctx.globalAlpha = 1 - done;
-    rr(1193, 303, 84, 36, 10); ctx.stroke(); ctx.restore();
+    rr(btn.x - 6, btn.y - 6, btn.w + 12, btn.h + 12, 10); ctx.stroke(); ctx.restore();
   }
-  // The spec path, then the patch.
+  const R = { x: 1370, w: 440 };
+  // The selection points at its spec path.
+  arrow(btn.x + btn.w + 14, ty, R.x - 12, 200, easeOut(seg(t, 2.4, 2.8)), { lw: 3, alpha: 0.7 });
   const pp = seg(t, 2.6, 3.8);
-  card(1360, 220, 440, 70, { alpha: easeOut(seg(t, 2.5, 2.8)), fill: C.code });
-  text(typed("/screens/main/…/button", pp), 1385, 255, { size: 22, mono: true, color: C.amber });
+  card(R.x, 165, R.w, 70, { alpha: easeOut(seg(t, 2.5, 2.8)), fill: C.code });
+  text(typed("/screens/main/…/button", pp), R.x + 24, 200, { size: 22, mono: true, color: C.amber });
+  arrow(R.x + R.w / 2, 245, R.x + R.w / 2, 312, easeOut(seg(t, 3.7, 4.0)), { lw: 3 });
   const dp = easeOut(seg(t, 3.9, 4.4));
-  card(1360, 320, 440, 200, { alpha: dp, fill: C.code });
-  [["- \"variant\": \"plain\"", C.red], ["+ \"variant\": \"{{due ? 'primary'", C.green], ["+    : 'plain'}}\"", C.green]].forEach(([l, col], i) => {
-    text(typed(l, seg(t, 4.2 + i * 0.5, 4.7 + i * 0.5)), 1385, 366 + i * 44, { size: 21, mono: true, color: col });
+  card(R.x, 322, R.w, 190, { alpha: dp, fill: C.code });
+  [["- \"variant\": \"plain\"", C.red], ["+ \"variant\": \"{{due ?", C.green], ["+   'primary' : 'plain'}}\"", C.green]].forEach(([l, col], i) => {
+    text(typed(l, seg(t, 4.2 + i * 0.5, 4.7 + i * 0.5)), R.x + 24, 362 + i * 40, { size: 21, mono: true, color: col });
   });
-  text("apply_patch", 1580, 490, { size: 18, color: C.soft, align: "center", alpha: dp });
+  text("apply_patch", R.x + R.w - 20, 490, { size: 17, color: C.soft, align: "right", alpha: dp });
+  arrow(R.x + R.w / 2, 522, R.x + R.w / 2, 590, easeOut(seg(t, 5.8, 6.1)), { lw: 3 });
   // The screenshot check: a shutter flash and a tick.
   const flash = seg(t, 6.2, 6.6);
-  if (flash > 0 && flash < 1) { ctx.save(); ctx.globalAlpha = 1 - flash; ctx.fillStyle = "#fff"; rr(993, 203, 294, 614, 40); ctx.fill(); ctx.restore(); }
-  card(1360, 560, 440, 90, { alpha: easeOut(seg(t, 6.0, 6.4)) });
-  text("screenshot · looks right", 1580, 605, { size: 24, align: "center", alpha: easeOut(seg(t, 6.0, 6.4)) });
-  check(1740, 605, 22, seg(t, 6.8, 7.2));
+  if (flash > 0 && flash < 1) { ctx.save(); ctx.globalAlpha = 1 - flash; ctx.fillStyle = "#fff"; rr(P.x + m, P.y + m, P.w - 2 * m, P.h - 2 * m, P.w * 0.11); ctx.fill(); ctx.restore(); }
+  card(R.x, 600, R.w, 84, { alpha: easeOut(seg(t, 6.0, 6.4)) });
+  text("screenshot · looks right", R.x + 30, 642, { size: 24, alpha: easeOut(seg(t, 6.0, 6.4)) });
+  check(R.x + R.w - 44, 642, 22, seg(t, 6.8, 7.2));
 };
 
 // 5. A schedule in the spec becomes an OS notification at 9:00, app closed.
 SCENES.services = (t) => {
-  // Clock to 9:00.
   const cp = easeInOut(seg(t, 0.6, 3.0));
   const hours = lerp(6.5, 9, cp);
-  const cx = 1080, cy = 330, r = 120;
+  const cx = 1080, cy = 280, r = 115;
   ctx.save(); ctx.globalAlpha = easeOut(seg(t, 0.2, 0.6));
   ctx.beginPath(); ctx.arc(cx, cy, r, 0, 7); ctx.fillStyle = "rgba(255,255,255,0.06)"; ctx.fill(); ctx.strokeStyle = C.line; ctx.lineWidth = 3; ctx.stroke();
   for (let i = 0; i < 12; i++) { const a = (i / 12) * 2 * Math.PI; ctx.beginPath(); ctx.moveTo(cx + Math.cos(a) * (r - 14), cy + Math.sin(a) * (r - 14)); ctx.lineTo(cx + Math.cos(a) * (r - 4), cy + Math.sin(a) * (r - 4)); ctx.stroke(); }
   const ha = ((hours % 12) / 12) * 2 * Math.PI - Math.PI / 2, ma = ((hours % 1) * 2 * Math.PI) - Math.PI / 2;
-  ctx.strokeStyle = C.ink; ctx.lineCap = "round"; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ha) * 60, cy + Math.sin(ha) * 60); ctx.stroke();
-  ctx.lineWidth = 5; ctx.strokeStyle = C.accent; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ma) * 92, cy + Math.sin(ma) * 92); ctx.stroke();
+  ctx.strokeStyle = C.ink; ctx.lineCap = "round"; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ha) * 58, cy + Math.sin(ha) * 58); ctx.stroke();
+  ctx.lineWidth = 5; ctx.strokeStyle = C.accent; ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(cx + Math.cos(ma) * 88, cy + Math.sin(ma) * 88); ctx.stroke();
   ctx.restore();
-  text("\"schedule\": { \"at\": \"09:00\" }", cx, 500, { size: 22, mono: true, color: C.amber, align: "center", alpha: seg(t, 0.4, 0.8) });
-  // The locked phone; the banner slides in at 9:00.
-  phone(1380, 160, 320, 640, (sx, sy, sw, sh) => {
+  text("\"schedule\": { \"at\": \"09:00\" }", cx, 440, { size: 22, mono: true, color: C.amber, align: "center", alpha: seg(t, 0.4, 0.8) });
+  // At 9:00 the scheduler hands the reminder to the OS.
+  arrow(cx + r + 16, cy, 1366, cy, easeOut(seg(t, 2.9, 3.3)), { lw: 3 });
+  text("OS notification", (cx + r + 1366) / 2 + 8, cy - 24, { size: 18, color: C.soft, align: "center", alpha: seg(t, 3.0, 3.4) });
+  phone(1440, 120, 340, 680, (sx, sy, sw, sh) => {
     const g = ctx.createLinearGradient(sx, sy, sx, sy + sh); g.addColorStop(0, "#1d2350"); g.addColorStop(1, "#3b1f63");
     ctx.fillStyle = g; ctx.fillRect(sx, sy, sw, sh);
     const hh = Math.floor(hours), mm = Math.floor((hours % 1) * 60);
-    text(`${hh}:${String(mm).padStart(2, "0")}`, sx + sw / 2, sy + 130, { size: 72, weight: 300, align: "center" });
-    text("App closed", sx + sw / 2, sy + 190, { size: 18, color: C.soft, align: "center" });
+    text(`${hh}:${String(mm).padStart(2, "0")}`, sx + sw / 2, sy + 130, { size: 74, weight: 300, align: "center" });
+    text("App closed", sx + sw / 2, sy + 192, { size: 18, color: C.soft, align: "center" });
     const bp = pop(seg(t, 3.2, 3.8));
     if (bp > 0) {
       const by = lerp(sy - 120, sy + 240, bp);
@@ -379,12 +406,12 @@ SCENES.services = (t) => {
       text("Boston fern is due today", sx + 92, by + 64, { size: 16, weight: 400, color: "#444" });
     }
   }, { alpha: easeOut(seg(t, 0.3, 0.8)), screen: "#1d2350" });
-  // What every app gets, as chips.
+  // What every app gets, as chips (left of the phone).
   [["SQLite storage", C.accent], ["Keychain secrets", C.violet], ["Widgets", C.green], ["Files & camera", C.amber]].forEach(([l, col], i) => {
     const a = pop(seg(t, 4.4 + i * 0.35, 4.9 + i * 0.35));
     if (a <= 0) return;
-    const x = 960 + (i % 2) * 230, y = 600 + Math.floor(i / 2) * 90;
-    ctx.save(); ctx.globalAlpha = clamp(a); ctx.translate(x + 105, y + 32); ctx.scale(a, a);
+    const x = 930 + (i % 2) * 230 + 100, y = 560 + Math.floor(i / 2) * 90;
+    ctx.save(); ctx.globalAlpha = clamp(a); ctx.translate(x, y); ctx.scale(a, a);
     rr(-105, -32, 210, 64, 32); ctx.fillStyle = "rgba(255,255,255,0.08)"; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.stroke();
     text(l, 0, 0, { size: 21, align: "center" }); ctx.restore();
   });
@@ -393,34 +420,35 @@ SCENES.services = (t) => {
 // 6. Pantry publishes, the store holds, the shopping list reads after one Allow.
 SCENES.share = (t) => {
   const appCard = (x, title, rows, a, highlight) => {
-    card(x, 230, 300, 380, { alpha: a });
-    text(title, x + 24, 280, { size: 28, weight: 700, alpha: a });
+    card(x, 230, 250, 360, { alpha: a });
+    text(title, x + 22, 278, { size: 28, weight: 700, alpha: a });
     rows.forEach((r, i) => {
       const ra = a * (r.alpha ?? 1);
-      rr(x + 20, 320 + i * 64, 260, 50, 12); ctx.save(); ctx.globalAlpha = ra; ctx.fillStyle = highlight === i ? "rgba(56,211,159,0.3)" : C.dim; ctx.fill(); ctx.restore();
-      text(r.name, x + 40, 345 + i * 64, { size: 22, alpha: ra });
-      if (r.count != null) text(String(r.count), x + 260, 345 + i * 64, { size: 22, color: r.count < 2 ? C.amber : C.soft, align: "right", alpha: ra });
+      rr(x + 18, 316 + i * 62, 214, 48, 12); ctx.save(); ctx.globalAlpha = ra; ctx.fillStyle = highlight === i ? "rgba(56,211,159,0.3)" : C.dim; ctx.fill(); ctx.restore();
+      text(r.name, x + 36, 340 + i * 62, { size: 22, alpha: ra });
+      if (r.count != null) text(String(r.count), x + 214, 340 + i * 62, { size: 22, color: r.count < 2 ? C.amber : C.soft, align: "right", alpha: ra });
     });
   };
+  const L = 910, R = 1570, sx = 1370, sy = 340, srx = 78;
   const low = t > 4.2;
-  appCard(940, "Pantry", [{ name: "Tomatoes", count: 3 }, { name: "Jars", count: low ? 1 : 4 }, { name: "Spaghetti", count: 1 }], easeOut(seg(t, 0.2, 0.6)));
+  appCard(L, "Pantry", [{ name: "Tomatoes", count: 3 }, { name: "Jars", count: low ? 1 : 4 }, { name: "Spaghetti", count: 1 }], easeOut(seg(t, 0.2, 0.6)));
   // The store.
   const sa = easeOut(seg(t, 0.6, 1.0));
   ctx.save(); ctx.globalAlpha = sa;
-  const sx = 1370, sy = 330;
-  glow(sx, sy + 60, 160, "rgba(107,122,255,0.3)");
+  glow(sx, sy + 60, 150, "rgba(107,122,255,0.3)");
   ctx.fillStyle = "rgba(107,122,255,0.35)"; ctx.strokeStyle = C.accent; ctx.lineWidth = 3;
-  ctx.beginPath(); ctx.ellipse(sx, sy, 90, 28, 0, 0, 7); ctx.fill(); ctx.stroke();
-  ctx.fillRect(sx - 90, sy, 180, 130); ctx.beginPath(); ctx.moveTo(sx - 90, sy); ctx.lineTo(sx - 90, sy + 130); ctx.moveTo(sx + 90, sy); ctx.lineTo(sx + 90, sy + 130); ctx.stroke();
-  ctx.beginPath(); ctx.ellipse(sx, sy + 130, 90, 28, 0, 0, Math.PI); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(sx, sy, srx, 26, 0, 0, 7); ctx.fill(); ctx.stroke();
+  ctx.fillRect(sx - srx, sy, srx * 2, 120); ctx.beginPath(); ctx.moveTo(sx - srx, sy); ctx.lineTo(sx - srx, sy + 120); ctx.moveTo(sx + srx, sy); ctx.lineTo(sx + srx, sy + 120); ctx.stroke();
+  ctx.beginPath(); ctx.ellipse(sx, sy + 120, srx, 26, 0, 0, Math.PI); ctx.stroke();
   ctx.restore();
-  text("personal data store", sx, 530, { size: 22, color: C.soft, align: "center", alpha: sa });
+  text("personal", sx, 520, { size: 21, color: C.soft, align: "center", alpha: sa });
+  text("data store", sx, 546, { size: 21, color: C.soft, align: "center", alpha: sa });
   // The shopping list asks once.
   const shopRows = [{ name: "Spaghetti" }, { name: "Oat milk" }, ...(t > 6.4 ? [{ name: "Jars", alpha: easeOut(seg(t, 6.4, 6.9)) }] : [])];
-  appCard(1500, "Shopping", shopRows, easeOut(seg(t, 1.0, 1.4)), t > 6.4 && t < 8 ? 2 : -1);
+  appCard(R, "Shopping", shopRows, easeOut(seg(t, 1.0, 1.4)), t > 6.4 && t < 8 ? 2 : -1);
   const dp = pop(seg(t, 1.6, 2.0)) * (1 - seg(t, 3.2, 3.5));
   if (dp > 0) {
-    ctx.save(); ctx.globalAlpha = clamp(dp); ctx.translate(1650, 700); ctx.scale(dp, dp);
+    ctx.save(); ctx.globalAlpha = clamp(dp); ctx.translate(1600, 720); ctx.scale(dp, dp);
     rr(-210, -70, 420, 140, 22); ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
     text("Shopping wants to read", 0, -32, { size: 20, weight: 700, color: "#111", align: "center" });
     text("your pantry from Pantry", 0, -6, { size: 20, weight: 700, color: "#111", align: "center" });
@@ -432,91 +460,113 @@ SCENES.share = (t) => {
     ctx.restore();
   }
   // Data flows: publish, then read.
-  if (t > 3.4) {
-    for (let k = 0; k < 3; k++) {
-      const q = ((t - 3.4) * 0.7 + k / 3) % 1;
-      packet(lerp(1240, 1280, q), 400, "rgb(107,122,255)", 7);
-      packet(lerp(1460, 1500, q), 400, "rgb(56,211,159)", 7);
+  const a1 = [L + 262, 400, sx - srx - 14, 400], a2 = [sx + srx + 14, 400, R - 12, 400];
+  arrow(...a1, easeOut(seg(t, 1.0, 1.4)), { lw: 3 });
+  text("publish", (a1[0] + a1[2]) / 2, 372, { size: 18, color: C.soft, align: "center", alpha: seg(t, 1.2, 1.6) });
+  arrow(...a2, easeOut(seg(t, 3.3, 3.7)), { lw: 3, color: C.green });
+  text("read", (a2[0] + a2[2]) / 2, 372, { size: 18, color: C.soft, align: "center", alpha: seg(t, 3.4, 3.8) });
+  if (t > 3.6) {
+    for (let k = 0; k < 2; k++) {
+      const q = ((t - 3.6) * 0.6 + k / 2) % 1;
+      packet(lerp(a1[0], a1[2] - 10, q), 400, "rgb(107,122,255)", 6);
+      packet(lerp(a2[0], a2[2] - 10, q), 400, "rgb(56,211,159)", 6);
     }
-    arrow(1240, 400, 1280, 400, 1, { lw: 3 });
-    arrow(1460, 400, 1500, 400, 1, { lw: 3, color: C.green });
   }
-  if (t > 4.2 && t < 6.4) {
+  if (t > 4.4 && t < 6.4) {
     const q = easeInOut(seg(t, 4.6, 6.4));
-    const x = q < 0.5 ? lerp(1240, 1370, q * 2) : lerp(1370, 1500, (q - 0.5) * 2);
-    packet(x, 400 - Math.sin(q * Math.PI) * 80, "rgb(255,200,87)", 12, "Jars · 1");
+    const x = q < 0.5 ? lerp(a1[0], sx, q * 2) : lerp(sx, a2[2], (q - 0.5) * 2);
+    packet(x, 400 - Math.sin(q * Math.PI) * 110, "rgb(255,200,87)", 12, "Jars · 1");
   }
 };
 
 // 7. Apps call Meta's models through the shell, which holds the key.
 SCENES.ai = (t) => {
   const a = (s) => easeOut(seg(t, s, s + 0.4));
-  card(960, 180, 240, 100, { alpha: a(0.2) });
-  text("App", 1080, 215, { size: 28, weight: 700, align: "center", alpha: a(0.2) });
-  text("ask · findObjects", 1080, 250, { size: 18, mono: true, color: C.soft, align: "center", alpha: a(0.2) });
-  card(1250, 180, 240, 100, { alpha: a(0.5), fill: "rgba(107,122,255,0.25)", stroke: C.accent });
-  text("Shell", 1370, 215, { size: 28, weight: 700, align: "center", alpha: a(0.5) });
+  const APP = { x: 920, y: 130, w: 260, h: 100 }, SH = { x: 1300, y: 130, w: 260, h: 100 };
+  card(APP.x, APP.y, APP.w, APP.h, { alpha: a(0.2) });
+  text("App", APP.x + APP.w / 2, APP.y + 38, { size: 28, weight: 700, align: "center", alpha: a(0.2) });
+  text("ask · findObjects", APP.x + APP.w / 2, APP.y + 72, { size: 18, mono: true, color: C.soft, align: "center", alpha: a(0.2) });
+  card(SH.x, SH.y, SH.w, SH.h, { alpha: a(0.5), fill: "rgba(107,122,255,0.25)", stroke: C.accent });
+  text("Shell", SH.x + SH.w / 2, SH.y + 38, { size: 28, weight: 700, align: "center", alpha: a(0.5) });
   // The key stays in the shell.
   ctx.save(); ctx.globalAlpha = a(0.7); ctx.strokeStyle = C.amber; ctx.lineWidth = 4;
-  ctx.beginPath(); ctx.arc(1340, 250, 10, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(1350, 250); ctx.lineTo(1385, 250); ctx.moveTo(1376, 250); ctx.lineTo(1376, 260); ctx.stroke(); ctx.restore();
-  text("your key", 1415, 250, { size: 17, color: C.amber, alpha: a(0.7) });
-  arrow(1200, 230, 1246, 230, a(0.6), { lw: 3 });
-  const models = [["Muse Spark", 1000], ["SAM 3.1", 1370], ["Muse Image", 1700]];
+  const kx = SH.x + 78, ky = SH.y + 72;
+  ctx.beginPath(); ctx.arc(kx, ky, 9, 0, 7); ctx.stroke(); ctx.beginPath(); ctx.moveTo(kx + 9, ky); ctx.lineTo(kx + 40, ky); ctx.moveTo(kx + 32, ky); ctx.lineTo(kx + 32, ky + 9); ctx.stroke(); ctx.restore();
+  text("your key", kx + 52, ky, { size: 17, color: C.amber, alpha: a(0.7) });
+  arrow(APP.x + APP.w + 12, APP.y + APP.h / 2, SH.x - 12, SH.y + SH.h / 2, a(0.6), { lw: 3 });
+  const MY = 330;
+  const models = [["Muse Spark", 1030], ["SAM 3.1", 1370], ["Muse Image", 1700]];
   models.forEach(([m, x], i) => {
-    card(x - 120, 360, 240, 80, { alpha: a(0.9 + i * 0.2), fill: "rgba(184,97,255,0.2)", stroke: C.violet });
-    text(m, x, 400, { size: 26, weight: 700, align: "center", alpha: a(0.9 + i * 0.2) });
-    arrow(1370, 290, x, 352, a(1.0 + i * 0.2), { lw: 2, alpha: 0.5 });
+    card(x - 110, MY, 220, 76, { alpha: a(0.9 + i * 0.2), fill: "rgba(184,97,255,0.2)", stroke: C.violet });
+    text(m, x, MY + 38, { size: 25, weight: 700, align: "center", alpha: a(0.9 + i * 0.2) });
+    arrow(SH.x + SH.w / 2, SH.y + SH.h + 12, x, MY - 12, a(1.0 + i * 0.2), { lw: 2, alpha: 0.5 });
   });
   // A request travels and an answer streams back.
   const rq = easeInOut(seg(t, 1.8, 2.6));
-  if (rq > 0 && rq < 1) packet(lerp(1080, 1000, rq), lerp(280, 360, rq), "rgb(107,122,255)", 9, "ask");
-  card(940, 480, 330, 220, { alpha: a(2.6), fill: C.code });
-  ["Chicken fried rice", "Pea & egg bowl", "Soy stir-fry"].forEach((l, i) => text(typed(`${i + 1}. ${l}`, seg(t, 2.8 + i * 0.6, 3.4 + i * 0.6)), 962, 525 + i * 50, { size: 20, mono: true, color: C.green }));
+  if (rq > 0 && rq < 1) packet(lerp(SH.x + SH.w / 2, 1030, rq), lerp(SH.y + SH.h + 12, MY - 12, rq), "rgb(107,122,255)", 9, "ask");
+  const OY = 500;
+  arrow(1030, MY + 88, 1030, OY - 12, a(2.4), { lw: 3, color: C.green });
+  card(890, OY, 280, 200, { alpha: a(2.6), fill: C.code });
+  ["Chicken fried rice", "Pea & egg bowl", "Soy stir-fry"].forEach((l, i) => text(typed(`${i + 1}. ${l}`, seg(t, 2.8 + i * 0.6, 3.4 + i * 0.6)), 908, OY + 46 + i * 48, { size: 18.5, mono: true, color: C.green }));
   // SAM draws boxes around jars on a shelf.
-  const sx = 1290, sy = 480, sw = 380, sh = 260;
+  const sx = 1205, sy = OY, sw = 330, sh = 250;
+  arrow(1370, MY + 88, 1370, OY - 12, a(3.4), { lw: 3, color: C.green });
   card(sx, sy, sw, sh, { alpha: a(3.6), fill: "#3a2a1f", r: 16 });
   ctx.save(); ctx.globalAlpha = a(3.6);
-  ctx.fillStyle = "#6b4a33"; ctx.fillRect(sx + 10, sy + sh - 60, sw - 20, 14);
+  ctx.fillStyle = "#6b4a33"; ctx.fillRect(sx + 10, sy + sh - 56, sw - 20, 14);
   for (let k = 0; k < 4; k++) {
-    const jx = sx + 40 + k * 82, jy = sy + 80;
-    rr(jx, jy, 56, 120, 12); ctx.fillStyle = "rgba(200,220,255,0.55)"; ctx.fill();
-    rr(jx + 6, jy - 14, 44, 20, 6); ctx.fillStyle = "#c9a227"; ctx.fill();
+    const jx = sx + 34 + k * 72, jy = sy + 78;
+    rr(jx, jy, 50, 114, 12); ctx.fillStyle = "rgba(200,220,255,0.55)"; ctx.fill();
+    rr(jx + 5, jy - 14, 40, 20, 6); ctx.fillStyle = "#c9a227"; ctx.fill();
     const bp = seg(t, 4.4 + k * 0.35, 4.8 + k * 0.35);
     if (bp > 0) {
       ctx.save(); ctx.strokeStyle = C.green; ctx.lineWidth = 3; ctx.setLineDash([12, 6]);
-      const m = 8 * (1 - easeOut(bp)); ctx.globalAlpha = clamp(bp * 2);
-      rr(jx - 8 - m, jy - 22 - m, 72 + 2 * m, 150 + 2 * m, 8); ctx.stroke(); ctx.restore();
+      const mm = 8 * (1 - easeOut(bp)); ctx.globalAlpha = clamp(bp * 2);
+      rr(jx - 6 - mm, jy - 21 - mm, 62 + 2 * mm, 142 + 2 * mm, 8); ctx.stroke(); ctx.restore();
     }
   }
   ctx.restore();
   const count = Math.min(4, Math.floor(seg(t, 4.4, 5.8) * 4.01));
-  if (count > 0) { rr(sx + sw - 150, sy + 16, 134, 44, 22); ctx.fillStyle = C.green; ctx.fill(); text(`jar × ${count}`, sx + sw - 83, sy + 38, { size: 22, weight: 700, color: "#0a0d1f", align: "center" }); }
-  text("SAM 3.1 · findObjects", sx + sw / 2, sy + sh + 34, { size: 20, color: C.soft, align: "center", alpha: a(3.6) });
+  if (count > 0) { rr(sx + sw - 146, sy + 14, 130, 42, 21); ctx.fillStyle = C.green; ctx.fill(); text(`jar × ${count}`, sx + sw - 81, sy + 35, { size: 21, weight: 700, color: "#0a0d1f", align: "center" }); }
+  text("findObjects · counts and boxes", sx + sw / 2, sy + sh + 30, { size: 19, color: C.soft, align: "center", alpha: a(3.6) });
+  // Muse Image draws the app's icon.
+  const ip = pop(seg(t, 5.8, 6.3));
+  arrow(1700, MY + 88, 1700, OY + 30, a(5.5), { lw: 3, color: C.green });
+  if (ip > 0) {
+    ctx.save(); ctx.globalAlpha = clamp(ip); ctx.translate(1700, OY + 100); ctx.scale(ip, ip);
+    rr(-56, -56, 112, 112, 28); ctx.fillStyle = "#2e7d32"; ctx.fill();
+    ctx.fillStyle = "#c8f2c9"; ctx.beginPath(); ctx.ellipse(-8, 4, 18, 32, -0.5, 0, 7); ctx.fill(); ctx.beginPath(); ctx.ellipse(16, -2, 14, 26, 0.6, 0, 7); ctx.fill();
+    ctx.restore();
+    text("app icon", 1700, OY + 184, { size: 19, color: C.soft, align: "center", alpha: clamp(ip) });
+  }
 };
 
 // 8. A sandboxed script computes a value; the UI is still a native view tree.
 SCENES.code = (t) => {
   const a = (s) => easeOut(seg(t, s, s + 0.4));
+  const SB = { x: 950, y: 110, w: 560, h: 330 };
   ctx.save(); ctx.globalAlpha = a(0.2); ctx.strokeStyle = C.accent; ctx.lineWidth = 3; ctx.setLineDash([14, 10]); ctx.lineDashOffset = -t * 30;
-  rr(950, 170, 520, 380, 26); ctx.stroke(); ctx.restore();
-  text("sandbox", 980, 205, { size: 22, weight: 700, color: C.accent, alpha: a(0.2) });
+  rr(SB.x, SB.y, SB.w, SB.h, 26); ctx.stroke(); ctx.restore();
+  text("sandbox", SB.x + 30, SB.y + 36, { size: 22, weight: 700, color: C.accent, alpha: a(0.2) });
   const code = ["exports.convert = ({ text }) =>", "  yaml.dump(parseCsv(text));", "", "// libraries: js-yaml@4.1.0", "// sha256 9f2c…e41a"];
-  code.forEach((l, i) => text(typed(l, seg(t, 0.6 + i * 0.5, 1.1 + i * 0.5)), 980, 260 + i * 40, { size: 22, mono: true, color: l.startsWith("//") ? C.soft : C.ink }));
-  // The 5 s limit ring.
+  code.forEach((l, i) => text(typed(l, seg(t, 0.6 + i * 0.5, 1.1 + i * 0.5)), SB.x + 30, SB.y + 90 + i * 40, { size: 22, mono: true, color: l.startsWith("//") ? C.soft : C.ink }));
+  // Beside the box: the 5 s limit and the pinned-library lock.
   const rp = seg(t, 1.5, 5.0);
-  ctx.save(); ctx.globalAlpha = a(1.2); ctx.lineWidth = 8; ctx.strokeStyle = C.dim; ctx.beginPath(); ctx.arc(1390, 480, 40, 0, 7); ctx.stroke();
-  ctx.strokeStyle = C.amber; ctx.beginPath(); ctx.arc(1390, 480, 40, -Math.PI / 2, -Math.PI / 2 + rp * 2 * Math.PI * 0.32); ctx.stroke(); ctx.restore();
-  text("≤ 5 s", 1390, 480, { size: 18, weight: 700, align: "center", alpha: a(1.2) });
-  // The lock: pinned by hash.
+  const rx = 1660, ry = 200;
+  ctx.save(); ctx.globalAlpha = a(1.2); ctx.lineWidth = 8; ctx.strokeStyle = C.dim; ctx.beginPath(); ctx.arc(rx, ry, 44, 0, 7); ctx.stroke();
+  ctx.strokeStyle = C.amber; ctx.beginPath(); ctx.arc(rx, ry, 44, -Math.PI / 2, -Math.PI / 2 + rp * 2 * Math.PI * 0.32); ctx.stroke(); ctx.restore();
+  text("≤ 5 s", rx, ry, { size: 19, weight: 700, align: "center", alpha: a(1.2) });
+  text("per call", rx, ry + 66, { size: 18, color: C.soft, align: "center", alpha: a(1.2) });
   ctx.save(); ctx.globalAlpha = a(2.4); ctx.strokeStyle = C.green; ctx.lineWidth = 4;
-  rr(1280, 470, 44, 34, 6); ctx.stroke(); ctx.beginPath(); ctx.arc(1302, 470, 13, Math.PI, 0); ctx.stroke(); ctx.restore();
+  rr(rx - 24, 340, 48, 38, 6); ctx.stroke(); ctx.beginPath(); ctx.arc(rx, 340, 15, Math.PI, 0); ctx.stroke(); ctx.restore();
+  text("pinned", rx, 404, { size: 18, color: C.soft, align: "center", alpha: a(2.4) });
   // Outputs: a value and a native view tree.
-  arrow(1210, 560, 1080, 640, a(3.4), { lw: 3 });
-  arrow(1210, 560, 1520, 640, a(3.6), { lw: 3 });
-  card(960, 650, 240, 80, { alpha: a(3.6), fill: C.code });
-  text("value: \"key: …\"", 1080, 690, { size: 20, mono: true, color: C.green, align: "center", alpha: a(3.6) });
-  // The tree.
-  const nodes = [[1560, 670, "column"], [1460, 780, "text"], [1560, 780, "row"], [1660, 780, "button"], [1520, 880, "text"], [1600, 880, "toggle"]];
+  const out = { x: SB.x + SB.w / 2, y: SB.y + SB.h + 12 };
+  arrow(out.x, out.y, 1070, 548, a(3.4), { lw: 3 });
+  arrow(out.x, out.y, 1580, 548, a(3.6), { lw: 3 });
+  card(950, 560, 240, 76, { alpha: a(3.6), fill: C.code });
+  text("value: \"key: …\"", 1070, 598, { size: 20, mono: true, color: C.green, align: "center", alpha: a(3.6) });
+  const nodes = [[1580, 580, "column"], [1470, 680, "text"], [1580, 680, "row"], [1690, 680, "button"], [1530, 780, "text"], [1630, 780, "toggle"]];
   const edges = [[0, 1], [0, 2], [0, 3], [2, 4], [2, 5]];
   edges.forEach(([i, j], k) => {
     const p = easeOut(seg(t, 4.0 + k * 0.2, 4.4 + k * 0.2));
@@ -526,10 +576,10 @@ SCENES.code = (t) => {
     const p = pop(seg(t, 3.9 + k * 0.2, 4.4 + k * 0.2));
     if (p <= 0) return;
     ctx.save(); ctx.globalAlpha = clamp(p); ctx.translate(x, y); ctx.scale(p, p);
-    rr(-48, -20, 96, 40, 12); ctx.fillStyle = k === 0 ? "rgba(107,122,255,0.35)" : C.dim; ctx.fill(); ctx.strokeStyle = C.line; ctx.stroke();
+    rr(-50, -20, 100, 40, 12); ctx.fillStyle = k === 0 ? "rgba(107,122,255,0.35)" : C.dim; ctx.fill(); ctx.strokeStyle = C.line; ctx.stroke();
     text(l, 0, 0, { size: 17, mono: true, align: "center" }); ctx.restore();
   });
-  text("native view tree", 1560, 950, { size: 20, color: C.soft, align: "center", alpha: a(4.8) });
+  text("native view tree", 1580, 850, { size: 20, color: C.soft, align: "center", alpha: a(4.8) });
 };
 
 window.renderFrame = (id, t, duration, section) => {
