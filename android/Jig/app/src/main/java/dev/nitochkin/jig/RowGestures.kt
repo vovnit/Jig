@@ -17,6 +17,9 @@ import org.json.JSONObject
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+/** A full swipe takes a deliberate drag past this share of the row, not a flick. */
+private const val FULL_SWIPE = 0.75f
+
 /**
  * List row gestures: swipe a row left to reveal its actions, long-press it to drag and
  * reorder. The runtime owns the order: a dragged row reports each neighbour it passes
@@ -49,6 +52,8 @@ class RowGestures(
         var scroll0 = 0
         var pendingAt = 0L
         var longPress: Runnable? = null
+        /** Dragged past the full-swipe point, where letting go runs the first action. */
+        var armed = false
     }
 
     private var gesture: Gesture? = null
@@ -196,6 +201,12 @@ class RowGestures(
         if (tx > 0) tx /= 4
         if (tx < -width) tx = -width - (-width - tx) / 4
         g.row.translationX = tx
+        // A full swipe runs the first action (a delete, often): a tick says when it's armed.
+        val past = tx < -width * FULL_SWIPE
+        if (past != g.armed) {
+            g.armed = past
+            g.row.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+        }
     }
 
     private fun endSwipe(g: Gesture, cancelled: Boolean) {
@@ -207,7 +218,7 @@ class RowGestures(
         val actionsWidth = panelWidth(panel)
         val tx = row.translationX
         when {
-            !cancelled && tx < -width * 0.6f -> {
+            !cancelled && g.armed && tx < -width * FULL_SWIPE -> {
                 // A full swipe runs the first action. Run it now rather than when the slide ends:
                 // another animation on the row (its fade-out) would cancel that end action.
                 row.performHapticFeedback(HapticFeedbackConstants.CONFIRM)

@@ -22,7 +22,7 @@ struct JigChoices: EntityQuery {
 }
 struct JigConfiguration: WidgetConfigurationIntent {
     static let title: LocalizedStringResource = "Choose an app widget"
-    @Parameter(title: "Widget") var selection: JigChoice?
+    @Parameter(title: "App") var selection: JigChoice?
 }
 struct JigEntry: TimelineEntry {
     let date: Date
@@ -54,7 +54,13 @@ struct JigWidgetView: View {
         Group {
             if let name = (scheme == .dark ? entry.dark : entry.light), let path = root()?.appendingPathComponent(name).path, let image = UIImage(contentsOfFile: path) {
                 Image(uiImage: image).resizable().scaledToFit().accessibilityLabel("Jig app widget")
-            } else { Text("Open Jig to set up an app widget.").padding() }
+            } else {
+                // Say what to do: no app has a widget yet, or this one isn't drawn yet.
+                Text(catalog().isEmpty
+                    ? "No Jig app has a widget yet. In Jig, open an app, tap Change and ask for one."
+                    : "Long-press this widget and tap Edit Widget to choose an app.")
+                    .font(.footnote).multilineTextAlignment(.center).padding()
+            }
         }.containerBackground(.background, for: .widget).widgetURL(entry.url)
     }
 }

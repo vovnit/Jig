@@ -17,6 +17,10 @@ final class RowGestures: NSObject, UIGestureRecognizerDelegate {
     private var rows: [Int: UIView] = [:]
     private var open: (id: Int, row: UIView, panel: UIView, width: CGFloat)?
     private var swipe: (id: Int, row: UIView, panel: UIView, base: CGFloat)?
+    /// A full swipe runs the first action (a delete, often), so it takes a deliberate drag
+    /// past this share of the row, not a flick; a tick says when it's armed.
+    private static let fullSwipe: CGFloat = 0.75
+    private var armed = false
     private var drag: Drag?
     /// A drag just ended: the tap recognizer sees its touch end too.
     private(set) var endedAt: CFTimeInterval = 0
@@ -124,6 +128,7 @@ final class RowGestures: NSObject, UIGestureRecognizerDelegate {
             open = nil
             let panel = reopening?.panel ?? makePanel(id: id, row: row)
             swipe = (id, row, panel, reopening.map { -$0.width } ?? 0)
+            armed = false
         case .changed:
             guard let s = swipe else { return }
             let width = row.bounds.width
@@ -132,6 +137,11 @@ final class RowGestures: NSObject, UIGestureRecognizerDelegate {
             if tx > 0 { tx /= 4 }
             if tx < -width { tx = -width - (-width - tx) / 4 }
             row.transform = CGAffineTransform(translationX: tx, y: 0)
+            let past = tx < -width * Self.fullSwipe
+            if past != armed {
+                armed = past
+                UISelectionFeedbackGenerator().selectionChanged()
+            }
         case .ended, .cancelled, .failed:
             guard let s = swipe else { return }
             swipe = nil
@@ -143,7 +153,7 @@ final class RowGestures: NSObject, UIGestureRecognizerDelegate {
                     row.transform = to == 0 ? .identity : CGAffineTransform(translationX: to, y: 0)
                 } completion: { _ in done() }
             }
-            if g.state == .ended, tx < -width * 0.6 {
+            if g.state == .ended, armed, row.transform.tx < -width * Self.fullSwipe {
                 // A full swipe runs the first action.
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 springs(-width) {

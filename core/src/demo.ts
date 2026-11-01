@@ -24,6 +24,11 @@ export type DemoStep =
 export interface DemoScript { name: string; speed?: number; pause?: number; steps: DemoStep[] }
 
 /** `${method} ${pathname}` of a request; image prompts join the key so each prompt replays its own picture. */
+/** The app name in an icon request's key ("…icon for 'Plant Watering': …"), if any. */
+function iconTitle(key: string): string | null {
+  return /icon for '([^']*)'/.exec(key)?.[1] ?? null;
+}
+
 export function tapeKey(args: Record<string, unknown>): string {
   const method = String((args as { method?: unknown }).method ?? "GET");
   const url = String((args as { url?: unknown }).url ?? "");
@@ -115,6 +120,7 @@ export function recordHttp(host: Host, tape: Tape): void {
 export function replayHttp(host: Host, tape: Tape, speed = 1, onMiss?: (args: Record<string, unknown>, done: (result: unknown, error?: string) => void, progress?: (update: Record<string, unknown>) => void) => void): void {
   const orig = host.call;
   const remaining = [...(tape?.entries ?? [])];
+  const images = remaining.filter((e) => e.key.includes("/images/generations"));
   const s = speed && speed > 0 ? speed : 1;
   const after = (ms: number, cb: () => void) => {
     if (host.after) host.after(ms / s, cb);
@@ -135,11 +141,18 @@ export function replayHttp(host: Host, tape: Tape, speed = 1, onMiss?: (args: Re
       return done(null, `No '${service}' service`);
     }
     const key = tapeKey(args);
-    let idx = remaining.findIndex((e) => e.key === key);
-    if (idx < 0 && pathnameOf(String(args.url ?? "")).endsWith("/images/generations")) {
-      const pathKey = `${String(args.method ?? "GET")} ${pathnameOf(String(args.url ?? ""))}`;
-      idx = remaining.findIndex((e) => e.key === pathKey || e.key.startsWith(`${pathKey} `));
+    // Icons are decoration, and their prompt carries the app's description, which can
+    // differ with when the icon is asked for: match them by the app's name, and serve
+    // them as often as they're asked for.
+    if (pathnameOf(String(args.url ?? "")).endsWith("/images/generations")) {
+      const title = iconTitle(key);
+      const icon = images.find((e) => e.key === key) ?? (title ? images.find((e) => iconTitle(e.key) === title) : undefined);
+      if (icon) {
+        after(icon.ms, () => done({ status: icon.status, body: icon.body }));
+        return;
+      }
     }
+    const idx = remaining.findIndex((e) => e.key === key);
     if (idx < 0) {
       if (onMiss) {
         onMiss(args, done, progress);

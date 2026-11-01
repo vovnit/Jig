@@ -685,6 +685,77 @@
                 }
               ]
             }
+          },
+          {
+            "type": "text",
+            "variant": "headline",
+            "value": "Home-screen widgets",
+            "style": {
+              "marginTop": 16
+            }
+          },
+          {
+            "type": "text",
+            "variant": "caption",
+            "value": "Apps with a widget can show it on your Home Screen, one app per widget."
+          },
+          {
+            "type": "column",
+            "style": {
+              "gap": 6,
+              "padding": 12,
+              "radius": 12,
+              "background": "surface"
+            },
+            "children": [
+              {
+                "type": "text",
+                "variant": "callout",
+                "value": "1. Long-press an empty spot on your Home Screen."
+              },
+              {
+                "type": "text",
+                "variant": "callout",
+                "value": "2. iPhone: tap Edit, then Add Widget. Android: tap Widgets."
+              },
+              {
+                "type": "text",
+                "variant": "callout",
+                "value": "3. Find Jig, pick a size and add it."
+              },
+              {
+                "type": "text",
+                "variant": "callout",
+                "value": "4. Pick the app it shows. iPhone: long-press the widget and tap Edit Widget. Android: Jig asks as you add it."
+              }
+            ]
+          },
+          {
+            "type": "list",
+            "items": "filter(apps, a => len(keys(a.spec.widgets ?? {})) > 0)",
+            "as": "w",
+            "empty": "No app has a widget yet. Open an app, tap Change and ask for a home-screen widget.",
+            "row": {
+              "type": "column",
+              "style": {
+                "gap": 2
+              },
+              "children": [
+                {
+                  "type": "text",
+                  "variant": "headline",
+                  "value": "{{w.spec.name}}"
+                },
+                {
+                  "type": "text",
+                  "variant": "caption",
+                  "value": "{{join(map(keys(w.spec.widgets), k => w.spec.widgets[k].title ?? k), ' · ')}}",
+                  "style": {
+                    "color": "muted"
+                  }
+                }
+              ]
+            }
           }
         ]
       }

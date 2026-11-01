@@ -47,7 +47,7 @@ test("replayHttp streams lines then the body, scaled by speed", () => {
   assert.deepEqual(result, { status: 200, body: "done" });
 });
 
-test("replayHttp consumes FIFO per key, falls back for images, misses 599 and swallows schedule", () => {
+test("replayHttp consumes FIFO per key, matches icons by app name, misses 599 and swallows schedule", () => {
   const host = {
     after: (_ms: number, cb: () => void) => cb(),
     log: () => {},
@@ -59,7 +59,7 @@ test("replayHttp consumes FIFO per key, falls back for images, misses 599 and sw
     entries: [
       { key: "POST /v1/responses", status: 200, body: "first", ms: 0 },
       { key: "POST /v1/responses", status: 200, body: "second", ms: 0 },
-      { key: "POST /v1/images/generations a cat", status: 200, body: "cat-pic", ms: 0 },
+      { key: "POST /v1/images/generations A simple, flat app icon for 'Plants': Water them.", status: 200, body: "plant-pic", ms: 0 },
     ],
   };
   replayHttp(host, tape, 1);
@@ -67,11 +67,11 @@ test("replayHttp consumes FIFO per key, falls back for images, misses 599 and sw
   return (async () => {
     assert.deepEqual(await get({ url: "https://api.meta.ai/v1/responses", method: "POST" }), { status: 200, body: "first" });
     assert.deepEqual(await get({ url: "https://api.meta.ai/v1/responses", method: "POST" }), { status: 200, body: "second" });
-    // No exact prompt match: falls back to the path's remaining picture.
-    assert.deepEqual(
-      await get({ url: "https://api.meta.ai/v1/images/generations", method: "POST", body: JSON.stringify({ prompt: "a dog" }) }),
-      { status: 200, body: "cat-pic" },
-    );
+    // An icon matches by the app's name even when its description changed, and serves again.
+    const icon = (prompt: string) => get({ url: "https://api.meta.ai/v1/images/generations", method: "POST", body: JSON.stringify({ prompt }) });
+    assert.deepEqual(await icon("A simple, flat app icon for 'Plants': Track and water plants."), { status: 200, body: "plant-pic" });
+    assert.deepEqual(await icon("A simple, flat app icon for 'Plants': Water them."), { status: 200, body: "plant-pic" });
+    assert.equal(((await icon("A simple, flat app icon for 'Books': Read.")) as { status: number }).status, 599, "another app's icon misses");
     const warns: string[] = [];
     (host as unknown as { log: Host["log"] }).log = (_l, m) => void warns.push(m);
     assert.deepEqual(await get({ url: "https://api.meta.ai/v1/unknown", method: "GET" }), {
