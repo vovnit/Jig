@@ -24,7 +24,7 @@ import org.json.JSONObject
  * SQLite also runs on the JS thread: the runtime saves at the end of a frame, after
  * the ops are sent.
  */
-class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
+class JigRuntime(context: Context, private val renderer: AndroidRenderer, private val demo: Boolean = false) {
     data class Theme(val colors: Map<String, String>, val isDark: Boolean)
 
     /** Called on main after a load or color scheme change. */
@@ -47,10 +47,10 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     // ---------- API (call from main) ----------
 
-    /** Starts the shell; [seedsJson] is an array of bundled app specs for its list. */
-    fun boot(shellJson: String, seedsJson: String) {
+    /** Starts the shell; [seedsJson] is an array of bundled app specs for its list. [demoJson] carries a scripted take in demo mode. */
+    fun boot(shellJson: String, seedsJson: String, demoJson: String = "") {
         js.post {
-            call("__jigBoot", shellJson, seedsJson)
+            call("__jigBoot", shellJson, seedsJson, demoJson)
             publishTheme()
         }
     }
@@ -126,7 +126,11 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
 
     private fun installNative(toggle: Pair<Double, Double>, slider: Pair<Double, Double>, timePicker: Pair<Double, Double>) {
         val native = qjs.createNewJSObject()
-        val database = SqlDatabase(appContext)
+        // In demo mode a separate database, deleted first so the take starts from the
+        // seeded state and never touches the user's apps.
+        val dbName = if (demo) "jig-demo.sqlite" else "jig.sqlite"
+        if (demo) appContext.deleteDatabase(dbName)
+        val database = SqlDatabase(appContext, dbName)
         val secrets = SecretStore(appContext)
 
         native.setProperty("apply", JSCallFunction { args ->
@@ -185,7 +189,10 @@ class JigRuntime(context: Context, private val renderer: AndroidRenderer) {
         })
         native.setProperty("now", JSCallFunction { SystemClock.uptimeMillis().toDouble() })
         native.setProperty("log", JSCallFunction { args ->
-            Log.w(TAG, "${args[0]}: ${args[1]}")
+            // Info and below ride logcat as info, so the record script sees the demo lines.
+            if (args[0] == "error") Log.e(TAG, "${args[0]}: ${args[1]}")
+            else if (args[0] == "warn") Log.w(TAG, "${args[0]}: ${args[1]}")
+            else Log.i(TAG, "${args[0]}: ${args[1]}")
             null
         })
         qjs.globalObject.setProperty("__native", native)

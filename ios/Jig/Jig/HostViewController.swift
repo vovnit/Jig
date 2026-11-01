@@ -12,8 +12,10 @@ final class HostViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .systemBackground
+        // Demo mode (a scripted take for the demo video): `-jigDemo <name>` on launch.
+        let demoName = UserDefaults.standard.string(forKey: "jigDemo")
         renderer = UIKitRenderer(surface: view)
-        runtime = JigRuntime(renderer: renderer)
+        runtime = JigRuntime(renderer: renderer, demo: demoName?.isEmpty == false)
         FileService.presenter = self
         runtime.onTheme = { [weak self] theme in self?.apply(theme) }
         setUpBackSwipe()
@@ -29,7 +31,14 @@ final class HostViewController: UIViewController {
         }
 
         let (shell, seeds) = Self.bundledSpecs()
-        runtime.boot(shellJSON: shell, seedsJSON: seeds)
+        let demoJSON = Self.demoJSON(name: demoName)
+        if let demoName, !demoName.isEmpty {
+            // Drop the previous take so the record script's polling only finds the new one.
+            Self.clearStaleDemoTake(name: demoName)
+            // A take runs minutes; the screen stays awake for it.
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+        runtime.boot(shellJSON: shell, seedsJSON: seeds, demoJSON: demoJSON)
         ScheduleService.shared.onOpen = { [weak self] app, screen in self?.runtime.open(app: app, screen: screen) }
     }
 
@@ -98,12 +107,18 @@ final class HostViewController: UIViewController {
     // MARK: - Specs
 
     /// `shell.json`, and every other bundled spec (as a JSON array) for the shell's app list.
+    /// Demo scenarios and model reply tapes ride along flat in the bundle; they are
+    /// skipped here (tapes are large) and read by `demoJSON` instead.
     private static func bundledSpecs() -> (shell: String, seeds: String) {
         guard let shellURL = Bundle.main.url(forResource: "shell", withExtension: "json"),
               let shell = try? String(contentsOf: shellURL, encoding: .utf8)
         else { fatalError("shell.json is missing from the app bundle. Run `npm run build:native` in the repo root.") }
         let urls = (Bundle.main.urls(forResourcesWithExtension: "json", subdirectory: nil) ?? [])
-            .filter { $0.lastPathComponent != "shell.json" }
+            .filter {
+                $0.lastPathComponent != "shell.json"
+                    && !$0.lastPathComponent.hasPrefix("demo-")
+                    && !$0.lastPathComponent.hasPrefix("tape-")
+            }
             .sorted { $0.lastPathComponent < $1.lastPathComponent }
         let seeds = urls.compactMap { url -> String? in
             guard let data = try? Data(contentsOf: url),
@@ -113,5 +128,27 @@ final class HostViewController: UIViewController {
             return String(data: data, encoding: .utf8)
         }
         return (shell, "[" + seeds.joined(separator: ",") + "]")
+    }
+
+    /// The demo payload for `__jigBoot`: the scenario's script with its model reply
+    /// tape, concatenated as text (not re-serialized). `""` outside demo mode; the
+    /// tape is null when the scenario ships without one.
+    private static func demoJSON(name: String?) -> String {
+        guard let name, !name.isEmpty else { return "" }
+        guard let scriptURL = Bundle.main.url(forResource: "demo-\(name)", withExtension: "json"),
+              let script = try? String(contentsOf: scriptURL, encoding: .utf8)
+        else { fatalError("demo-\(name).json is missing from the app bundle. Run `npm run build:native` in the repo root.") }
+        let tape = Bundle.main.url(forResource: "tape-\(name)", withExtension: "json")
+            .flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "null"
+        return "{\"script\":" + script + ",\"tape\":" + tape + "}"
+    }
+
+    /// Deletes the previous take for `name`, so the record script polling for
+    /// `Documents/demo/<name>.json` only finds the new one.
+    private static func clearStaleDemoTake(name: String) {
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("demo")
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(name).json"))
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(name).mp4"))
     }
 }

@@ -1,0 +1,138 @@
+{
+  "name": "2-shopping",
+  "speed": 1,
+  "steps": [
+    {
+      "record": "start"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "mark": "home"
+    },
+    {
+      "tap": "New app"
+    },
+    {
+      "mark": "describe"
+    },
+    {
+      "type": "A shopping list that reads my pantry inventory and adds anything I have fewer than 2 of. I can also add my own items, check them off in the store, and clear the checked ones.",
+      "into": "A packing list for trips, with categories"
+    },
+    {
+      "tap": "Create"
+    },
+    {
+      "mark": "generating"
+    },
+    {
+      "waitIdle": true
+    },
+    {
+      "mark": "built"
+    },
+    {
+      "wait": 2500
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "mark": "open"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "Shopping list"
+    },
+    {
+      "tap": "Allow"
+    },
+    {
+      "mark": "use"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "Add low pantry items"
+    },
+    {
+      "type": "Oat milk",
+      "into": "Add item…"
+    },
+    {
+      "tap": "Add"
+    },
+    {
+      "tap": "Oat milk"
+    },
+    {
+      "tap": "Spaghetti"
+    },
+    {
+      "tap": "Clear checked",
+      "contains": true
+    },
+    {
+      "mark": "pantry"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "Done"
+    },
+    {
+      "tap": "Pantry"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "setItem": {
+        "app": "Pantry",
+        "list": "items",
+        "where": {
+          "name": "Jars"
+        },
+        "set": {
+          "count": 1
+        }
+      }
+    },
+    {
+      "wait": 2000
+    },
+    {
+      "tap": "Done"
+    },
+    {
+      "tap": "Shopping list"
+    },
+    {
+      "mark": "shared"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "tap": "Add low pantry items"
+    },
+    {
+      "mark": "result"
+    },
+    {
+      "wait": 3500
+    },
+    {
+      "record": "stop"
+    }
+  ]
+}

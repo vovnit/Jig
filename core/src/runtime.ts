@@ -494,6 +494,52 @@ export class Runtime {
     return true;
   }
 
+  /**
+   * Types into a text field as the demo driver does: like a `change` from the host,
+   * but the value is pushed back to the host (it wasn't the user's own typing).
+   */
+  typeInto(id: number, value: string): void {
+    if (!this.nodes.has(id)) {
+      for (const e of this.embeds) if (e.rt.owns(id)) return e.rt.typeInto(id, value);
+      return;
+    }
+    const node = this.nodes.get(id);
+    if (!node) return;
+    const h = this.handlers.get(id);
+    // Not the user's typing, so the binding effect echoes it to the host.
+    this.nativeValues.delete(id);
+    if (h?.bind) this.assign(h.bind, h.scope, coerce(value, this.peekPath(h.bind, h.scope)));
+    if (h?.onChange) this.run(h.onChange, childScope(h.scope, { value }));
+    this.setProp(node, "value", value);
+  }
+
+  /**
+   * Scrolls a node into view: its y within the nearest vertical scroll ancestor,
+   * sent as a `scrollTo` command the host animates to.
+   */
+  scrollIntoView(id: number, margin = 24): void {
+    if (!this.nodes.has(id)) {
+      for (const e of this.embeds) if (e.rt.owns(id)) return e.rt.scrollIntoView(id, margin);
+      return;
+    }
+    const node = this.nodes.get(id);
+    if (!node) return;
+    let scroll: ViewNode | null = node.parent;
+    while (scroll && scroll.type !== "scroll") scroll = scroll.parent;
+    if (!scroll) return;
+    // Frames are relative to the parent, so the sum up to the scroll view is the node's y in its content.
+    let y = 0;
+    let cur: ViewNode | null = node;
+    while (cur && cur !== scroll) {
+      y += cur.frame[1];
+      cur = cur.parent;
+    }
+    const top = Math.max(0, y - margin);
+    this.structural.push(["command", scroll.id, "scrollTo", [top, true]]);
+    this.scrollOffsets.set(scroll.id, top);
+    this.scheduleFrame();
+  }
+
   /** Runs layout and sends the batch. Hosts normally reach this through requestFrame. */
   flush(): void {
     this.frameRequested = false;
@@ -1000,6 +1046,11 @@ export class Runtime {
     if (type === "list") return this.buildList(spec as ListSpec, scope, where);
     if (type === "app") return this.buildApp(spec, scope, where);
     if (type === "custom") return this.buildCustom(spec, scope, where);
+    // Models bind a check like a toggle: it shows the bound value and flips it on tap.
+    if (type === "check" && typeof spec.bind === "string") {
+      const { bind, ...rest } = spec;
+      spec = { ...rest, checked: rest.checked ?? `{{${bind}}}`, onTap: rest.onTap ?? { toggle: bind } };
+    }
     const component = this.components[type];
     if (component && !isPrimitive(type)) return this.buildComponent(spec, component, scope, where);
     return this.buildPrimitive(type, spec, [{ style: spec.style, scope }], scope, where);

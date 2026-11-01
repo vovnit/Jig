@@ -1,0 +1,108 @@
+{
+  "name": "3-dinner",
+  "speed": 2,
+  "steps": [
+    {
+      "record": "start"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "mark": "home"
+    },
+    {
+      "tap": "New app"
+    },
+    {
+      "mark": "describe"
+    },
+    {
+      "type": "What's for dinner: I type what's in my fridge, Meta's model suggests three dinners I can cook in 30 minutes with short steps, and I can save the ones I like to a favorites list.",
+      "into": "A packing list for trips, with categories"
+    },
+    {
+      "tap": "Create"
+    },
+    {
+      "mark": "generating"
+    },
+    {
+      "waitIdle": true
+    },
+    {
+      "mark": "built"
+    },
+    {
+      "wait": 2500
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "mark": "open"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "What's for dinner"
+    },
+    {
+      "mark": "use"
+    },
+    {
+      "type": "eggs, rice, frozen peas, soy sauce, chicken breast",
+      "into": "e.g. chicken, rice, broccoli, eggs"
+    },
+    {
+      "tap": "Get 3 dinners"
+    },
+    {
+      "tap": "Allow"
+    },
+    {
+      "mark": "asking"
+    },
+    {
+      "waitFor": "Save to favorites",
+      "timeout": 120000
+    },
+    {
+      "mark": "ideas"
+    },
+    {
+      "wait": 2500
+    },
+    {
+      "scrollTo": "Save to favorites"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "tap": "Save to favorites"
+    },
+    {
+      "scrollTo": "View all"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "View all"
+    },
+    {
+      "mark": "favorites"
+    },
+    {
+      "wait": 3500
+    },
+    {
+      "record": "stop"
+    }
+  ]
+}

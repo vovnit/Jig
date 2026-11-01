@@ -44,6 +44,17 @@ ffmpeg -i in.mov -filter:v "setpts=0.25*PTS" -an out.mp4
 
 Stop the recorders with Ctrl+C. Generation takes 30–150 s per app, so record it in full and time-lapse it in editing, keeping the streamed thoughts readable for a second or two.
 
+## Recording the side-by-side video
+
+The submission's phone footage is scripted takes of the same scenarios on a physical iPhone and Android phone, recorded at the same time and composed into one side-by-side video. A demo script runs inside Jig's JS runtime and drives the app; the model's HTTP traffic is replayed from a tape. Demo scenarios live in `demo/scenarios/<name>.json`, tapes in `demo/tapes/<name>.json` (record a tape in the web playground with `?demo=<name>&record`).
+
+```bash
+node scripts/demo-record.mjs [scenario ...]   # → demo/out/<name>-{ios,android}.{mp4,json}
+node scripts/demo-compose.mjs [scenario ...]  # → demo/out/<name>-side-by-side.mp4 and demo/out/side-by-side.mp4
+```
+
+What they need: both phones unlocked and connected, the iPhone trusted and in Developer Mode, Android USB debugging on. The iPhone shows ReplayKit's "Allow screen recording" prompt at the start of each scenario; accept it so the take records. The iPhone take uses the app's screen recording (its first frame is the take's start), the Android take uses `adb screenrecord`; each side's `.json` stamps that start plus the script's marks, and the composer holds the slower side's last frame in every segment so the two halves stay in step at each mark.
+
 ## Storyboard
 
 | Time | Shot | Voiceover |

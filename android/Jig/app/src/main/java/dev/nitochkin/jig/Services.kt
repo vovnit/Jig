@@ -81,6 +81,8 @@ object Services {
             "script.run" -> Sandbox.run(args, done)
             "script.render" -> Sandbox.render(args, done)
             "script.close" -> Sandbox.close(args, done)
+            // The Mac script records Android with `adb screenrecord` instead.
+            "demo.record" -> done(error("demo.record is done by adb screenrecord"))
             else -> done(error("No '$service' service on Android"))
         }
     }

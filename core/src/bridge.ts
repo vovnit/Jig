@@ -19,7 +19,9 @@ export type Op =
   /** Position relative to the parent: x, y, width, height in points. */
   | ["frame", number, number, number, number, number]
   /**
-   * Imperative command: `focus`, or on the root `transition` [kind: "push" | "pop",
+   * Imperative command: `focus`, `scrollTo` [y, animated] on a vertical scroll view
+   * (the host scrolls its content offset to `y`, clamped to the content, animated
+   * when `animated` is true), or on the root `transition` [kind: "push" | "pop",
    * style: "slide" | "fade", durationMs]. A host sees the transition before applying
    * the batch, snapshots the old screen, applies the ops and animates the new screen in.
    */

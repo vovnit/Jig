@@ -32,10 +32,19 @@ nonisolated final class SQLiteDatabase {
         sqlite3_close(db)
     }
 
-    /// The device's database, shared by every app.
-    static func standard() -> SQLiteDatabase {
+    /// The device's database, shared by every app. In demo mode a separate file,
+    /// deleted first so the demo starts from the seeded state and never touches
+    /// the user's apps.
+    static func standard(demo: Bool = false) -> SQLiteDatabase {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return SQLiteDatabase(url: dir.appendingPathComponent("Jig/jig.sqlite"))
+        let url = dir.appendingPathComponent(demo ? "Jig/jig-demo.sqlite" : "Jig/jig.sqlite")
+        if demo {
+            for suffix in ["", "-wal", "-shm", "-journal"] {
+                let file = suffix.isEmpty ? url : URL(fileURLWithPath: url.path + suffix)
+                try? FileManager.default.removeItem(at: file)
+            }
+        }
+        return SQLiteDatabase(url: url)
     }
 
     /// Runs one read. `paramsJSON` is a JSON array of values.

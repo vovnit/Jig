@@ -4,11 +4,12 @@ import type { Database, SqlValue } from "@jig/core";
 /**
  * SQLite compiled to wasm. Its pages live in localStorage (the kvvfs), which keeps
  * calls synchronous on the main thread, as the runtime expects; OPFS would need a worker.
+ * `memory` opens a throwaway database instead (demo takes), still shared by every app.
  */
-export async function openDatabase(): Promise<Database | undefined> {
+export async function openDatabase(memory = false): Promise<Database | undefined> {
   try {
     const sqlite3 = await sqlite3InitModule();
-    const db = new sqlite3.oo1.JsStorageDb("local");
+    const db = memory ? new sqlite3.oo1.DB(":memory:") : new sqlite3.oo1.JsStorageDb("local");
     return {
       query: (sql, params) =>
         db.exec({ sql, bind: params?.length ? params : undefined, rowMode: "object", returnValue: "resultRows" }) as Record<string, SqlValue>[],

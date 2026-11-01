@@ -303,3 +303,16 @@ test("an empty action value clears the field without an error", () => {
   assert.equal(rt.get("name"), "");
   assert.deepEqual(rt.errors, []);
 });
+
+test("a check with bind shows the bound value and flips it on tap", () => {
+  const { host, rt } = boot({
+    id: "c", name: "C", data: { done: { type: "boolean", default: false } },
+    screens: { main: { body: { type: "check", bind: "done" } } },
+  });
+  const check = findNode(rt, (p, type) => type === "overlay" && p.tappable === true)!;
+  assert.ok(check, "the check is tappable");
+  rt.dispatch(check.id, "tap");
+  frame(host);
+  assert.equal(rt.get("done"), true);
+  assert.ok(findNode(rt, (p, type) => type === "shape" && String(p.path ?? "").startsWith("M9.5")), "the tick shows");
+});

@@ -87,10 +87,20 @@ function __jigFrame() {
   for (var i = 0; i < q.length; i++) q[i]();
 }
 /** Starts the shell, adding the bundled demo apps to its list. */
-function __jigBoot(shellJson, seedsJson) {
+function __jigBoot(shellJson, seedsJson, demoJson) {
+  var demo = null;
+  if (typeof demoJson === "string" && demoJson) {
+    try { demo = JSON.parse(demoJson); } catch (e) { demo = null; }
+  }
+  if (demo) Jig.installDemo(host, demo);
   Jig.installBuilder(runtime);
   runtime.load(JSON.parse(shellJson), { fresh: true });
   Jig.seedApps(runtime, JSON.parse(seedsJson));
+  if (demo && demo.script) {
+    Jig.runDemo(runtime, demo.script).catch(function (e) {
+      try { host.log("info", "JIGDEMO " + JSON.stringify({ error: String((e && e.message) || e), step: -1 })); } catch (_) {}
+    });
+  }
 }
 /** A host service finished (see call). */
 function __jigResolve(id, json) {

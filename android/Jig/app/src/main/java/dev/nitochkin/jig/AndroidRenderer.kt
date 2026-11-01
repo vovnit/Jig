@@ -181,6 +181,20 @@ class AndroidRenderer(private val surface: JigLayout) {
                 "command" -> when (op.getString(2)) {
                     "focus" -> nodes[op.getInt(1)]?.view?.requestFocus()
                     "depth" -> depths[op.getInt(1)] = op.getJSONArray(3).getInt(0)
+                    // A scripted take scrolling a list: the offset (in dp) is clamped to the content.
+                    "scrollTo" -> {
+                        val args = op.optJSONArray(3)
+                        val y = args?.optDouble(0, 0.0) ?: 0.0
+                        val animated = args?.optBoolean(1, false) ?: false
+                        // After layout: frames in this batch only request it, and scrolling clamps to the measured content.
+                        (nodes[op.getInt(1)]?.view as? JigScrollView)?.let { scroll ->
+                            scroll.post {
+                                val px = (y * density).roundToInt()
+                                    .coerceIn(0, maxOf(0, scroll.content.contentHeight - scroll.height))
+                                if (animated) scroll.smoothScrollTo(0, px) else scroll.scrollTo(0, px)
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -1,0 +1,164 @@
+{
+  "name": "1-plants",
+  "speed": 1,
+  "steps": [
+    {
+      "record": "start"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "mark": "home"
+    },
+    {
+      "tap": "New app"
+    },
+    {
+      "mark": "describe"
+    },
+    {
+      "type": "My houseplants need water on different schedules. Let me add each plant with how many days between waterings, tap to mark it watered, see which are due today, and remind me at 9am when one is due.",
+      "into": "A packing list for trips, with categories"
+    },
+    {
+      "tap": "Create"
+    },
+    {
+      "mark": "generating"
+    },
+    {
+      "waitIdle": true
+    },
+    {
+      "mark": "built"
+    },
+    {
+      "wait": 2500
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "mark": "open"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "Plant Watering"
+    },
+    {
+      "tap": "Allow"
+    },
+    {
+      "mark": "use"
+    },
+    {
+      "type": "Monstera",
+      "into": "Name (e.g. Monstera)"
+    },
+    {
+      "tap": "Add"
+    },
+    {
+      "type": "Boston fern",
+      "into": "Name (e.g. Monstera)"
+    },
+    {
+      "type": "3",
+      "into": "Days"
+    },
+    {
+      "tap": "Add"
+    },
+    {
+      "setItem": {
+        "app": "Plant Watering",
+        "list": "plants",
+        "where": {
+          "name": "Boston fern"
+        },
+        "set": {
+          "lastWatered": "2026-10-01"
+        }
+      }
+    },
+    {
+      "mark": "due"
+    },
+    {
+      "wait": 1500
+    },
+    {
+      "tap": "Water 💧"
+    },
+    {
+      "mark": "watered"
+    },
+    {
+      "wait": 1000
+    },
+    {
+      "tap": "Change"
+    },
+    {
+      "tap": "Screen"
+    },
+    {
+      "tap": "Select"
+    },
+    {
+      "select": "Water"
+    },
+    {
+      "mark": "select"
+    },
+    {
+      "type": "Make this button filled green only when the plant is due, and show the due plants' names in red",
+      "into": "Change the selected button"
+    },
+    {
+      "tap": "Send"
+    },
+    {
+      "mark": "editing"
+    },
+    {
+      "waitIdle": true
+    },
+    {
+      "mark": "edited"
+    },
+    {
+      "wait": 2500
+    },
+    {
+      "tap": "‹ Back"
+    },
+    {
+      "setItem": {
+        "app": "Plant Watering",
+        "list": "plants",
+        "where": {
+          "name": "Boston fern"
+        },
+        "set": {
+          "lastWatered": "2026-10-01"
+        }
+      }
+    },
+    {
+      "mark": "result"
+    },
+    {
+      "wait": 3500
+    },
+    {
+      "record": "stop"
+    }
+  ]
+}

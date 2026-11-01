@@ -209,6 +209,10 @@ export class DomHost implements Host {
         case "command": {
           const el = this.els.get(op[1]);
           if (op[2] === "focus") (el as HTMLInputElement | undefined)?.focus();
+          else if (op[2] === "scrollTo") {
+            const [y, animated] = op[3] as [number, boolean];
+            el?.scrollTo({ top: Math.max(0, y), behavior: animated ? "smooth" : "auto" });
+          }
           break;
         }
       }

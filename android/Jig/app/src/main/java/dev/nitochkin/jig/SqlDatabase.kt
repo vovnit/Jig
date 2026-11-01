@@ -15,12 +15,12 @@ import org.json.JSONObject
  * Requests and results cross the bridge as JSON, which keeps numbers, strings and
  * nulls intact: every call returns `{"rows": [...]}` or `{"error": "..."}`.
  */
-class SqlDatabase(context: Context) {
+class SqlDatabase(context: Context, name: String = "jig.sqlite") {
     private var openError: String? = null
 
     /** The device's database, shared by every app. */
     private val db: SQLiteDatabase? = try {
-        context.openOrCreateDatabase("jig.sqlite", Context.MODE_PRIVATE, null).apply { enableWriteAheadLogging() }
+        context.openOrCreateDatabase(name, Context.MODE_PRIVATE, null).apply { enableWriteAheadLogging() }
     } catch (e: Exception) {
         openError = e.message
         null

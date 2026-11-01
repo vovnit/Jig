@@ -123,6 +123,14 @@ final class UIKitRenderer: NSObject, UIGestureRecognizerDelegate {
                 guard op.count >= 3, let id = int(op[1]), let name = op[2] as? String else { continue }
                 if name == "focus" { nodes[id]?.view.becomeFirstResponder() }
                 if name == "depth", let args = op[3] as? [Any], let depth = args.first.flatMap(int) { depths[id] = depth }
+                // A scripted take scrolling a list: the offset is clamped to the content.
+                if name == "scrollTo", let scroll = nodes[id]?.view as? JigScrollView {
+                    let args = op.count > 3 ? op[3] as? [Any] : nil
+                    let y = args.flatMap { $0.first }.map { double($0) } ?? 0
+                    let animated = args?.dropFirst().first as? Bool == true
+                    let maxY = max(0, scroll.contentSize.height - scroll.bounds.height)
+                    scroll.setContentOffset(CGPoint(x: 0, y: min(max(CGFloat(y), 0), maxY)), animated: animated)
+                }
             default:
                 continue
             }

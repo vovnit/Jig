@@ -18,6 +18,8 @@ export { SHAPES, BUILTIN_COMPONENTS } from "./builtins.ts";
 export { compile, compileTemplate, evaluate, freeIdentifiers, BUILTINS } from "./expr.ts";
 
 export { openApp } from "./builder/background.ts";
+export { recordHttp, replayHttp, memorySecrets, installDemo, runDemo, tapeKey } from "./demo.ts";
+export type { TapeEntry, Tape, DemoStep, DemoScript, RunDemoOptions } from "./demo.ts";
 export { deviceCollections, formatCollections } from "./shared.ts";
 export { occurrences } from "./schedule.ts";
 export { parseXml, unescapeEntities, descendants, child, textOf } from "./xml.ts";

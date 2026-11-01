@@ -11,5 +11,11 @@ dist/
 ios/Jig/Jig/Runtime/
 android/Jig/app/src/main/assets/runtime/
 
+# Demo recordings (scripts/demo-record.mjs, scripts/demo-compose.mjs)
+demo/out/
+
 # Worktrees for tasks handed to other models (scripts/delegate.sh)
 .worktrees/
+
+# Native builds from scripts/demo-record.mjs
+/build/

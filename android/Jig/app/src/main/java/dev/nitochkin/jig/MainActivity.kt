@@ -93,7 +93,13 @@ class MainActivity : ComponentActivity() {
         setContentView(surface)
 
         renderer = AndroidRenderer(surface)
-        runtime = JigRuntime(this, renderer)
+        // Demo mode (a scripted take for the demo video): `jigDemo` names the scenario.
+        val demoName = intent.getStringExtra("jigDemo")
+        if (!demoName.isNullOrEmpty()) {
+            // A take runs minutes; the screen stays on for it.
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+        runtime = JigRuntime(this, renderer, demo = !demoName.isNullOrEmpty())
         runtime.onTheme = ::applyTheme
         // System back pops a runtime screen while there is one to pop; otherwise Android handles it.
         renderer.onCanGoBack = { back.isEnabled = it }
@@ -111,7 +117,7 @@ class MainActivity : ComponentActivity() {
 
         runtime.setColorScheme(isNight(resources.configuration))
         val (shell, seeds) = bundledSpecs()
-        runtime.boot(shell, seeds)
+        runtime.boot(shell, seeds, demoJson(demoName))
         openFromIntent(intent)
     }
 
@@ -183,13 +189,25 @@ class MainActivity : ComponentActivity() {
 
     // ---------- Specs ----------
 
-    /** `shell.json`, and every other bundled spec (as a JSON array) for the shell's app list. */
+    /** `shell.json`, and every other bundled spec (as a JSON array) for the shell's app list. Demo scenarios and model reply tapes ride along flat in the assets; they are skipped here (tapes are large) and read by [demoJson] instead. */
     private fun bundledSpecs(): Pair<String, String> {
         val read = { file: String -> assets.open("runtime/$file").bufferedReader().use { it.readText() } }
         val seeds = (assets.list("runtime") ?: emptyArray()).sorted()
-            .filter { it.endsWith(".json") && it != "shell.json" }
+            .filter { it.endsWith(".json") && it != "shell.json" && !it.startsWith("demo-") && !it.startsWith("tape-") }
             .map(read)
             .filter { runCatching { JSONObject(it).has("screens") }.getOrDefault(false) }
         return read("shell.json") to seeds.joinToString(",", "[", "]")
+    }
+
+    /**
+     * The demo payload for `__jigBoot`: the scenario's script with its model reply
+     * tape, concatenated as text (not re-serialized). `""` outside demo mode; the
+     * tape is null when the scenario ships without one.
+     */
+    private fun demoJson(name: String?): String {
+        if (name.isNullOrEmpty()) return ""
+        val script = assets.open("runtime/demo-$name.json").bufferedReader().use { it.readText() }
+        val tape = runCatching { assets.open("runtime/tape-$name.json").bufferedReader().use { it.readText() } }.getOrNull() ?: "null"
+        return "{\"script\":" + script + ",\"tape\":" + tape + "}"
     }
 }

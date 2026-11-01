@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ReplayKit
 import UIKit
 
 /// Host services for the shell (`Host.call` in the runtime): HTTP for the model and audio
@@ -64,6 +65,8 @@ nonisolated enum Services {
             DispatchQueue.main.async { MainActor.assumeIsolated { Sandboxes.shared.render(args, done: done) } }
         case "script.close":
             DispatchQueue.main.async { MainActor.assumeIsolated { Sandboxes.shared.close(args, done: done) } }
+        case "demo.record":
+            DispatchQueue.main.async { MainActor.assumeIsolated { DemoRecorder.shared.handle(args, done: done) } }
         default:
             done(error("No '\(service)' service on iOS"))
         }
@@ -132,6 +135,73 @@ nonisolated enum Services {
     static func encode(_ object: [String: Any]) -> String {
         let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data(#"{"error":"Unencodable result"}"#.utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// Screen recording for the demo video (`demo.record`): ReplayKit writes the take
+/// into the app container, where the record script picks it up. The start time is
+/// kept here so the stop call can stamp the take's metadata with it.
+@MainActor
+final class DemoRecorder {
+    static let shared = DemoRecorder()
+    private static var startedAt: Double?
+    private init() {}
+
+    func handle(_ args: [String: Any], done: @escaping @Sendable (String) -> Void) {
+        switch args["action"] as? String {
+        case "start":
+            start(done: done)
+        case "stop":
+            stop(name: args["name"] as? String, marks: args["marks"], error: args["error"] as? String, done: done)
+        default:
+            done(Services.error("demo.record needs {action: start} or {action: stop, name, marks}"))
+        }
+    }
+
+    private func start(done: @escaping @Sendable (String) -> Void) {
+        let recorder = RPScreenRecorder.shared()
+        guard recorder.isAvailable else { return done(Services.error("Screen recording isn't available")) }
+        // The take is the app's own video; no microphone.
+        recorder.isMicrophoneEnabled = false
+        recorder.startRecording { error in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if let error { return done(Services.error(error.localizedDescription)) }
+                    // After the user accepted the prompt, so marks line up with the take.
+                    let startedAt = Date().timeIntervalSince1970 * 1000
+                    Self.startedAt = startedAt
+                    done(Services.result(["startedAt": startedAt]))
+                }
+            }
+        }
+    }
+
+    private func stop(name: String?, marks: Any?, error takeError: String?, done: @escaping @Sendable (String) -> Void) {
+        guard let name, !name.isEmpty else { return done(Services.error("demo.record stop needs a name")) }
+        guard let startedAt = Self.startedAt else { return done(Services.error("Not recording")) }
+        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("demo")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let video = dir.appendingPathComponent("\(name).mp4")
+        try? FileManager.default.removeItem(at: video)
+        // Serialized now: the marks aren't Sendable, the bytes are.
+        var payload: [String: Any] = ["startedAt": startedAt, "marks": marks ?? []]
+        if let takeError, !takeError.isEmpty { payload["error"] = takeError }
+        guard let meta = try? JSONSerialization.data(withJSONObject: payload) else { return done(Services.error("The take's marks aren't JSON")) }
+        RPScreenRecorder.shared().stopRecording(withOutput: video) { error in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    if let error { return done(Services.error(error.localizedDescription)) }
+                    do {
+                        try meta.write(to: dir.appendingPathComponent("\(name).json"))
+                        Self.startedAt = nil
+                        done(Services.result([:]))
+                    } catch {
+                        done(Services.error(error.localizedDescription))
+                    }
+                }
+            }
+        }
     }
 }
 

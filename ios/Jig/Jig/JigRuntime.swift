@@ -22,12 +22,15 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     // JS queue only.
     private let js = DispatchQueue(label: "dev.nitochkin.jig.js", qos: .userInteractive)
     private var context: JSContext!
+    /// Demo mode (a scripted take for the demo video): the database is separate.
+    private let demo: Bool
 
     // Main thread only.
     @MainActor private var displayLink: CADisplayLink?
 
     @MainActor
-    init(renderer: UIKitRenderer) {
+    init(renderer: UIKitRenderer, demo: Bool = false) {
+        self.demo = demo
         let toggleSize = UISwitch().intrinsicContentSize
         // A slider fills its width; only this height is used (160 is a nominal width, as for text fields).
         let sliderHeight = UISlider().intrinsicContentSize.height
@@ -44,9 +47,10 @@ nonisolated final class JigRuntime: @unchecked Sendable {
     // MARK: - API (call from main)
 
     /// Starts the shell; `seedsJSON` is an array of bundled app specs for its list.
-    func boot(shellJSON: String, seedsJSON: String) {
+    /// `demoJSON` carries a scripted take (`{"script": ..., "tape": ...}`) in demo mode.
+    func boot(shellJSON: String, seedsJSON: String, demoJSON: String = "") {
         js.async {
-            self.call("__jigBoot", shellJSON, seedsJSON)
+            self.call("__jigBoot", shellJSON, seedsJSON, demoJSON)
             self.publishTheme()
         }
     }
@@ -143,7 +147,7 @@ nonisolated final class JigRuntime: @unchecked Sendable {
                 MainActor.assumeIsolated { self?.scheduleFrame() }
             }
         }
-        let database = SQLiteDatabase.standard()
+        let database = SQLiteDatabase.standard(demo: demo)
         let sqlQuery: @convention(block) (String, String) -> String = { sql, params in database.query(sql, paramsJSON: params) }
         let sqlExec: @convention(block) (String) -> String = { statements in database.exec(statements) }
         let secretGet: @convention(block) (String, String) -> String? = { app, key in SecretStore.get(app: app, key: key) }

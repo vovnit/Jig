@@ -1,5 +1,5 @@
 import "./style.css";
-import { type AppSpec, type FrameStats, type Op, Runtime, openApp, installBuilder, runningApp, seedApps, updateApp } from "@jig/core";
+import { type AppSpec, type DemoScript, type FrameStats, type Op, type Tape, Runtime, installDemo, openApp, installBuilder, runDemo, runningApp, seedApps, updateApp } from "@jig/core";
 import { openDatabase } from "./db.ts";
 import { DomHost } from "./host.ts";
 import shell from "../../specs/shell.json";
@@ -22,7 +22,49 @@ const specInput = $<HTMLTextAreaElement>("#spec");
 const specStatus = $<HTMLDivElement>("#spec-status");
 
 const host = new DomHost(surface);
-host.db = await openDatabase();
+// In demo mode the run starts from the seeded state in a throwaway database, never touching playground data.
+const params = new URLSearchParams(location.search);
+const demoName = params.get("demo");
+const demoRecord = demoName && params.has("record");
+const scenarioLoaders = import.meta.glob("../../demo/scenarios/*.json");
+const tapeLoaders = import.meta.glob("../../demo/tapes/*.json");
+let demoScript: DemoScript | null = null;
+let demoTape: Tape | null = null;
+const recordTape: Tape = { entries: [] };
+if (demoName) {
+  const loadJson = async (loaders: Record<string, () => Promise<unknown>>, dir: string, name: string) => {
+    const mod = await loaders[`../../demo/${dir}/${name}.json`]?.();
+    return (mod as { default?: unknown } | null)?.default ?? mod;
+  };
+  try {
+    const raw = await loadJson(scenarioLoaders, "scenarios", demoName) as DemoScript | { script: DemoScript } | null;
+    demoScript = (raw as { script?: DemoScript })?.script ?? (raw as DemoScript);
+    if (!demoScript?.steps) throw new Error(`no scenario '${demoName}'`);
+  } catch (e) {
+    console.error(`[jig] no scenario 'demo/scenarios/${demoName}.json'`, e);
+    demoScript = null;
+  }
+  if (demoScript) {
+    // Extend mode (`&record` with an existing tape) replays what the tape has
+    // and records misses live on top of it; without `&record` a missing tape
+    // is an error and the demo doesn't run at all (never live traffic).
+    try {
+      const rawTape = await loadJson(tapeLoaders, "tapes", demoName) as Tape | { tape: Tape } | null;
+      demoTape = (rawTape as { tape?: Tape })?.tape ?? (rawTape as Tape) ?? null;
+      if (!demoTape?.entries) throw new Error("missing");
+    } catch {
+      demoTape = null;
+      if (!demoRecord) {
+        console.error(`[jig] no tape 'demo/tapes/${demoName}.json'`);
+        demoScript = null;
+      }
+    }
+  }
+}
+// A demo that can't run stops here: booting would send live traffic (lazy icons) with the dev key.
+if (demoName && !demoScript) throw new Error(`[jig] demo '${demoName}' can't run; see the errors above`);
+host.db = await openDatabase(Boolean(demoName));
+if (demoScript) installDemo(host, { script: demoScript, tape: demoTape }, demoRecord ? recordTape : undefined);
 // The phone runs the shell, as on iOS and Android; the panels follow the app running in it.
 const runtime = new Runtime(host, { trusted: true });
 host.runtime = runtime;
@@ -51,6 +93,17 @@ function applyThemeVars(): void {
 installBuilder(runtime);
 runtime.load(shell as unknown as AppSpec, { fresh: true });
 seedApps(runtime, SEEDS);
+if (demoScript) {
+  void runDemo(runtime, demoScript, {
+    onDone: demoRecord ? () => {
+      void fetch(`/__jig/tape?name=${encodeURIComponent(demoName!)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(recordTape),
+      }).catch((e) => console.error("[jig] saving the tape failed", e));
+    } : undefined,
+  });
+}
 // The dev server holds a key from .env (vite.config.ts) and adds it to model requests.
 declare const __DEV_MODEL_KEY__: boolean;
 if (import.meta.env.DEV && __DEV_MODEL_KEY__ && !runtime.get("apiKey")) runtime.set("apiKey", "from-dev-server");
